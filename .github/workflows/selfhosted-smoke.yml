@@ -119,88 +119,57 @@ jobs:
             if ($c) { Write-Host ("[OK]   {0,-8} {1}" -f $n, $c.Source) } else { Write-Host ("[WARN] {0,-8} MISSING" -f $n) }
           }
 
-      # ── 自架 runner 補給：7-Zip（2026-09-19 新增）───────────────────────
-      # 失敗實錄：i686 job 喺自架 Windows 機報 `Unable to locate executable file: 7z`
-      # （rustdesk-org/install-llvm-action-32bit 會 exec("7z") 解壓 LLVM-15.0.6-win32.exe）
-      # GitHub 託管 windows 映像已預裝 7-Zip，自架機冇 → 呢一步只喺 self-hosted 執行。
-      - name: Ensure 7-Zip (self-hosted only)
-        if: runner.environment == 'self-hosted'
+      # ── 機器層面環境核對（v1.0.7 修正後，2026-09-19 新增）──────────────
+      # 目標狀態：唔改 fork workflow，環境由 admin script 提供，所以呢一步用「絕對路徑 +
+      # 全新 process 嘅 PATH」核實，避免任何啟動時 PATH 殘留造成嘅誤報。
+      - name: "機器層面核對：7-Zip / LLVM 目錄 / LIBCLANG_PATH / rustup"
         shell: pwsh
         run: |
-          $existing = Get-Command 7z -ErrorAction SilentlyContinue
-          if ($existing) { Write-Host "[OK] 7z 已存在：$($existing.Source)"; exit 0 }
-
-          # ⚠️ 唔可以裝去 C:\Program Files：runner 服務帳號係 NT AUTHORITY\NETWORK SERVICE
-          #    （冇 admin）→ NSIS 安裝會靜默失敗（2026-09-19 真機實測揭發）。
-          #    改用 runner 自己可寫嘅 tool cache，逐個 job 重裝（1.6 MB，可接受）。
-          $dest = if ($env:RUNNER_TOOL_CACHE) { Join-Path $env:RUNNER_TOOL_CACHE '7zip' } else { Join-Path $env:RUNNER_TEMP '7zip' }
-          New-Item -ItemType Directory -Path $dest -Force | Out-Null
-
-          $urls = @(
-            'https://www.7-zip.org/a/7z2501-x64.exe',
-            'https://www.7-zip.org/a/7z2409-x64.exe'
-          )
-          $out = Join-Path $env:TEMP '7zsetup.exe'
-          $got = $false
-          foreach ($u in $urls) {
-            try {
-              Invoke-WebRequest -Uri $u -OutFile $out -UseBasicParsing -TimeoutSec 300
-              $got = $true; Write-Host "[OK] 已下載 $u"; break
-            } catch { Write-Warning "$u 下載失敗：$($_.Exception.Message)" }
+          $fail = 0
+          function Chk($name, $cond, $detail) {
+            if ($cond) { Write-Host ("[OK]   {0,-22} {1}" -f $name, $detail) }
+            else { Write-Host ("[FAIL] {0,-22} {1}" -f $name, $detail); $script:fail++ }
           }
-          if (-not $got) { Write-Host '::error::無法下載 7-Zip 安裝檔'; exit 1 }
+          $sz = 'C:\Program Files\7-Zip\7z.exe'
+          Chk '7-Zip 檔案' (Test-Path $sz) $sz
+          $w = (& where.exe 7z 2>&1 | Out-String).Trim()
+          Chk '7z（PATH 解析）' ($LASTEXITCODE -eq 0) $(if ($w) { $w } else { 'where.exe 找唔到 7z' })
+          $llvm = 'C:\Program Files\LLVM'
+          Chk 'LLVM 目錄' (Test-Path $llvm) $llvm
+          $lib = [Environment]::GetEnvironmentVariable('LIBCLANG_PATH', 'Machine')
+          Chk 'LIBCLANG_PATH（機器）' ($lib -eq (Join-Path $llvm 'bin')) $(if ($lib) { $lib } else { '(未設定)' })
+          $mp = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+          Chk 'PATH 含 7-Zip' ($mp -like '*7-Zip*') 'system PATH'
+          Chk 'PATH 含 cargo\bin' ($mp -like '*cargo\bin*') 'system PATH'
+          $r = Get-Command rustup -ErrorAction SilentlyContinue
+          Chk 'rustup（PATH 解析）' ($null -ne $r) $(if ($r) { $r.Source } else { 'PATH 上找不到 rustup' })
+          if ($r) { Write-Host ("       rustup = " + (& rustup -V 2>&1 | Select-Object -First 1)) }
+          $c = Get-Command cargo -ErrorAction SilentlyContinue
+          Chk 'cargo（PATH 解析）' ($null -ne $c) $(if ($c) { $c.Source } else { 'PATH 上找不到 cargo' })
+          if ($fail -gt 0) { Write-Host "::error::有 $fail 項環境核對失敗"; exit 1 }
+          Write-Host '機器層面環境全部通過。'
 
-          # NSIS 靜默安裝 + 自訂目錄（/D 必須係最後一個參數、唔可以用引號）
-          $p = Start-Process -FilePath $out -ArgumentList '/S', "/D=$dest" -Wait -PassThru
-          Write-Host "[INFO] 安裝程式結束代碼：$($p.ExitCode)"
-          $exe = Join-Path $dest '7z.exe'
-          for ($i = 0; $i -lt 30 -and -not (Test-Path $exe); $i++) { Start-Sleep -Seconds 1 }
-          if (-not (Test-Path $exe)) { Write-Host "::error::7-Zip 安裝後找不到 $exe"; exit 1 }
-          Add-Content -Path $env:GITHUB_PATH -Value $dest
-          Write-Host "[OK] 7-Zip 已安裝：$dest（已加入後續步驟 PATH）"
-      - name: "7-Zip 可用性驗證"
-        shell: pwsh
-        run: |
-          $p = (Get-Command 7z -ErrorAction SilentlyContinue).Source
-          if (-not $p) { Write-Host '[FAIL] 7z 唔喺 PATH'; exit 1 }
-          Write-Host "[OK]   7z = $p"
-          & 7z | Select-Object -First 2
-
-      # ── LLVM 安裝驗證（2026-09-19 新增）──────────────────────────────
-      # 失敗實錄：LLVM action 預設解壓去 C:\Program Files\LLVM —— 服務帳號 NETWORK SERVICE 冇權限：
-      #   "7z.exe x <archive> -oC:\Program Files\LLVM -y"
-      #   ERROR: Cannot create output directory : Access is denied. : C:\Program Files\LLVM\
-      # 修法 = 傳 directory: <runner tool cache>/llvm（只喺 self-hosted 生效；空字串會回落原預設）。
-      # 下面兩步同真實 flutter-build.yml 用嘅 action 版本 pin 完全一致 → 改完即驗，唔使等 nightly。
-      - name: Install LLVM and Clang — KyleMayes v2.0.9（真實 flutter job 用同一支）
+      # ── LLVM 安裝驗證（2026-09-19）────────────────────────────────────
+      # 刻意「唔傳 directory」= 用 action 自己嘅預設 C:\Program Files\LLVM —— 即還原 workflow
+      # 之後嘅真實行為。呢兩步成功就證明「修機」方案已取代 code 層面嘅 workaround。
+      - name: Install LLVM and Clang — KyleMayes v2.0.9（預設路徑）
         uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0 # v2.0.9
         with:
           version: 15.0.6
-          directory: ${{ runner.environment == 'self-hosted' && format('{0}/llvm', runner.tool_cache) || '' }}
 
-      - name: Install LLVM and Clang — rustdesk-org 32bit（真實 sciter job 用同一支）
+      - name: Install LLVM and Clang — rustdesk-org 32bit（預設路徑）
         uses: rustdesk-org/install-llvm-action-32bit@6aa7d9ad3df84dff01cd4596dd0fc880a7f47fce
         with:
           version: 15.0.6
-          directory: ${{ runner.environment == 'self-hosted' && format('{0}/llvm32', runner.tool_cache) || '' }}
 
-      - name: "LLVM 可用性驗證（LLVM_PATH + libclang.dll）"
+      - name: "LLVM 可用性驗證（libclang.dll + clang）"
         shell: pwsh
         run: |
-          Write-Host "LLVM_PATH = $env:LLVM_PATH"
-          if (-not $env:LLVM_PATH) { Write-Host '::error::LLVM_PATH 未設定（LLVM action 未成功）'; exit 1 }
-          $dirs = @($env:LLVM_PATH)
-          if ($env:RUNNER_TOOL_CACHE) {
-            $dirs += (Join-Path $env:RUNNER_TOOL_CACHE 'llvm')
-            $dirs += (Join-Path $env:RUNNER_TOOL_CACHE 'llvm32')
-          }
-          $fail = 0
-          foreach ($d in ($dirs | Select-Object -Unique)) {
-            $lib = Join-Path $d 'bin\libclang.dll'
-            if (Test-Path $lib) { Write-Host "[OK]   $lib" } else { Write-Host "[FAIL] 唔見 $lib"; $fail = 1 }
-          }
-          if ($fail) { Write-Host '::error::LLVM 未安裝到可寫目錄'; exit 1 }
-          & (Join-Path $env:LLVM_PATH 'bin\clang.exe') --version | Select-Object -First 1
+          $lib = Join-Path 'C:\Program Files\LLVM' 'bin\libclang.dll'
+          if (-not (Test-Path $lib)) { Write-Host "::error::唔見 $lib（預設路徑安裝失敗）"; exit 1 }
+          Write-Host "[OK]   $lib"
+          $env:LIBCLANG_PATH = (Join-Path 'C:\Program Files\LLVM' 'bin')
+          & (Join-Path 'C:\Program Files\LLVM' 'bin\clang.exe') --version | Select-Object -First 1
 
       - name: "vcpkg 目錄可寫 (runner 服務帳號)"
         shell: pwsh
