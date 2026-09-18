@@ -1,7 +1,8 @@
 name: Self-hosted Runner Smoke Test
 
-# 用途：驗證兩部自架 runner 真係收到 job，並且工具鏈、shell 環境全部可用。
-#   * Windows: SERVER2025-rd-win  (labels: self-hosted, Windows, X64, build)
+# 用途：驗證自架 runner 真係收到 job，並且工具鏈、shell 環境全部可用。
+#   * Windows: 兩部（GH-RUNNER-01-rd-win / GH-RUNNER-02-rd-win）—— 用 matrix 經
+#              per-machine label (win-01 / win-02) **分別**驗證，唔會隨機只驗一部
 #   * Linux  : github-runner-rd-linux (labels: self-hosted, Linux, X64, build)
 #
 # 安全設計（公開儲存庫）：
@@ -18,9 +19,13 @@ permissions:
 
 jobs:
   smoke-windows:
-    name: smoke (windows self-hosted)
+    name: smoke (windows self-hosted · ${{ matrix.machine }})
     if: github.repository == 'quincywong69/rustdesk'
-    runs-on: [self-hosted, Windows, X64, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        machine: [win-01, win-02]
+    runs-on: [self-hosted, Windows, X64, build, "${{ matrix.machine }}"]
     timeout-minutes: 20
     steps:
       - name: "環境資訊"
@@ -195,6 +200,37 @@ jobs:
             Write-Host ("[FAIL] C:\vcpkg 不可寫：{0}" -f $_.Exception.Message)
             exit 1
           }
+
+      # ── 符號連結支援（v1.0.15 修正驗證，2026-09-19）────────────────────
+      # `flutter build windows` 為 plugins 建立 symlink；Windows 預設只有 Administrators
+      # 有 SeCreateSymbolicLinkPrivilege。呢一步以 **runner 服務帳號身分**真正建立一個
+      # symlink —— 係唯一可靠嘅驗證方式（admin 身分測試唔算，因為 admin 一定有權）。
+      - name: "符號連結支援（flutter build windows 需要）"
+        shell: pwsh
+        run: |
+          $fail = 0
+          $k = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock'
+          $dev = $null
+          try { $dev = (Get-ItemProperty -Path $k -Name 'AllowDevelopmentWithoutDevLicense' -ErrorAction SilentlyContinue).AllowDevelopmentWithoutDevLicense } catch { }
+          Write-Host ("Developer Mode (AllowDevelopmentWithoutDevLicense) = " + $(if ($null -ne $dev) { $dev } else { '(未設定)' }))
+          Write-Host ("帳號 = " + [Security.Principal.WindowsIdentity]::GetCurrent().Name)
+          $dir    = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
+          $target = Join-Path $dir 'symlink-target.txt'
+          $link   = Join-Path $dir 'symlink-test'
+          'symlink-probe' | Set-Content -Path $target -Force
+          if (Test-Path $link) { Remove-Item $link -Force -Recurse -ErrorAction SilentlyContinue }
+          try {
+            New-Item -ItemType SymbolicLink -Path $link -Target $target -ErrorAction Stop | Out-Null
+            $item = Get-Item $link -ErrorAction Stop
+            Write-Host ("[OK]   符號連結建立成功（LinkType=" + $item.LinkType + "）")
+            Remove-Item $link -Force -ErrorAction SilentlyContinue
+          } catch {
+            Write-Host ("[FAIL] 無法建立符號連結：" + $_.Exception.Message)
+            $fail++
+          }
+          Remove-Item $target -Force -ErrorAction SilentlyContinue
+          if ($fail -gt 0) { Write-Host '::error::symlink 測試失敗 → flutter build windows 會失敗'; exit 1 }
+          Write-Host '符號連結支援正常。'
 
   smoke-linux:
     name: smoke (linux self-hosted)
