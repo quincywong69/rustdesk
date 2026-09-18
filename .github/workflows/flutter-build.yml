@@ -164,10 +164,20 @@ jobs:
           if (-not (Test-Path $exe)) { Write-Host "::error::7-Zip 安裝後找不到 $exe"; exit 1 }
           Add-Content -Path $env:GITHUB_PATH -Value $dest
           Write-Host "[OK] 7-Zip 已安裝：$dest（已加入後續步驟 PATH）"
+      # OUR FORK (2026-09-19) — self-hosted fix (2nd layer): BOTH LLVM actions default to
+      #   DEFAULT_WIN32_DIRECTORY = "C:/Program Files/LLVM" and shell out to 7z to extract
+      #   LLVM-15.0.6-win32.exe into it. The self-hosted runner service account is
+      #   NT AUTHORITY\NETWORK SERVICE (no admin), so that write is denied:
+      #     "ERROR: Cannot create output directory : Access is denied. : C:\Program Files\LLVM\"
+      #   On a hosted runner the account is an admin, so the default works there.
+      #   Point it at the runner's own tool cache when self-hosted — writable and persistent.
+      #   Passing an empty string is safe: the action falls back to its default
+      #   (`if (!options.directory) options.directory = DEFAULT_WIN32_DIRECTORY`).
       - name: Install LLVM and Clang
         uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0 # v2.0.9
         with:
           version: ${{ env.LLVM_VERSION }}
+          directory: ${{ runner.environment == 'self-hosted' && format('{0}/llvm', runner.tool_cache) || '' }}
 
       - name: Install flutter
         id: flutter
@@ -524,10 +534,18 @@ jobs:
           if (-not (Test-Path $exe)) { Write-Host "::error::7-Zip 安裝後找不到 $exe"; exit 1 }
           Add-Content -Path $env:GITHUB_PATH -Value $dest
           Write-Host "[OK] 7-Zip 已安裝：$dest（已加入後續步驟 PATH）"
+      # OUR FORK (2026-09-19) — self-hosted fix (2nd layer): this action also defaults to
+      #   DEFAULT_WIN32_DIRECTORY = "C:/Program Files/LLVM" and extracts with
+      #   `7z x <archive> -oC:\Program Files\LLVM -y`, which dies with
+      #     "ERROR: Cannot create output directory : Access is denied. : C:\Program Files\LLVM\"
+      #   on a self-hosted runner, because the service account is NT AUTHORITY\NETWORK SERVICE
+      #   (no admin). Hosted runners run as admin so the default is fine there.
+      #   Empty string = the action's own default (see `if (!options.directory) ...`).
       - name: Install LLVM and Clang
         uses: rustdesk-org/install-llvm-action-32bit@6aa7d9ad3df84dff01cd4596dd0fc880a7f47fce # no release tag; commit 2026-05-26
         with:
           version: ${{ env.LLVM_VERSION }}
+          directory: ${{ runner.environment == 'self-hosted' && format('{0}/llvm', runner.tool_cache) || '' }}
 
       # OUR FORK (2026-09-19) — fix: this step failed on EVERY build with
       #   "error: toolchain 'nightly-2023-10-13-i686-pc-windows-msvc' may not be able to

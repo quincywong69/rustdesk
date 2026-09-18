@@ -166,6 +166,42 @@ jobs:
           Write-Host "[OK]   7z = $p"
           & 7z | Select-Object -First 2
 
+      # ── LLVM 安裝驗證（2026-09-19 新增）──────────────────────────────
+      # 失敗實錄：LLVM action 預設解壓去 C:\Program Files\LLVM —— 服務帳號 NETWORK SERVICE 冇權限：
+      #   "7z.exe x <archive> -oC:\Program Files\LLVM -y"
+      #   ERROR: Cannot create output directory : Access is denied. : C:\Program Files\LLVM\
+      # 修法 = 傳 directory: <runner tool cache>/llvm（只喺 self-hosted 生效；空字串會回落原預設）。
+      # 下面兩步同真實 flutter-build.yml 用嘅 action 版本 pin 完全一致 → 改完即驗，唔使等 nightly。
+      - name: Install LLVM and Clang — KyleMayes v2.0.9（真實 flutter job 用同一支）
+        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0 # v2.0.9
+        with:
+          version: 15.0.6
+          directory: ${{ runner.environment == 'self-hosted' && format('{0}/llvm', runner.tool_cache) || '' }}
+
+      - name: Install LLVM and Clang — rustdesk-org 32bit（真實 sciter job 用同一支）
+        uses: rustdesk-org/install-llvm-action-32bit@6aa7d9ad3df84dff01cd4596dd0fc880a7f47fce
+        with:
+          version: 15.0.6
+          directory: ${{ runner.environment == 'self-hosted' && format('{0}/llvm32', runner.tool_cache) || '' }}
+
+      - name: "LLVM 可用性驗證（LLVM_PATH + libclang.dll）"
+        shell: pwsh
+        run: |
+          Write-Host "LLVM_PATH = $env:LLVM_PATH"
+          if (-not $env:LLVM_PATH) { Write-Host '::error::LLVM_PATH 未設定（LLVM action 未成功）'; exit 1 }
+          $dirs = @($env:LLVM_PATH)
+          if ($env:RUNNER_TOOL_CACHE) {
+            $dirs += (Join-Path $env:RUNNER_TOOL_CACHE 'llvm')
+            $dirs += (Join-Path $env:RUNNER_TOOL_CACHE 'llvm32')
+          }
+          $fail = 0
+          foreach ($d in ($dirs | Select-Object -Unique)) {
+            $lib = Join-Path $d 'bin\libclang.dll'
+            if (Test-Path $lib) { Write-Host "[OK]   $lib" } else { Write-Host "[FAIL] 唔見 $lib"; $fail = 1 }
+          }
+          if ($fail) { Write-Host '::error::LLVM 未安裝到可寫目錄'; exit 1 }
+          & (Join-Path $env:LLVM_PATH 'bin\clang.exe') --version | Select-Object -First 1
+
       - name: "vcpkg 目錄可寫 (runner 服務帳號)"
         shell: pwsh
         run: |
