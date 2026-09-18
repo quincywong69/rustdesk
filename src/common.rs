@@ -1080,6 +1080,26 @@ fn get_api_server_(api: String, custom: String) -> String {
             return format!("http://{}", s);
         }
     }
+    // OUR FORK (2026-09-19): self-hosted deployments only set `RENDEZVOUS_SERVERS`
+    // (injected at build time by CI), which does NOT flow into
+    // `get_custom_rendezvous_server()` — `PROD_RENDEZVOUS_SERVER` is read-only in the
+    // open-source tree and always empty. As a result a build pointing at our own ID
+    // server still sent the account login to the OFFICIAL RustDesk API server
+    // (admin.rustdesk.com) — observed live in the client's network connections.
+    // Derive the API server from the compiled-in ID server instead: same host,
+    // port - 2 (21116 -> 21114), mirroring the custom-rendezvous-server path above.
+    // Skipped for stock builds that keep the official rendezvous server.
+    if let Some(first) = config::RENDEZVOUS_SERVERS.first() {
+        let first = first.to_string();
+        if !first.is_empty() && !first.contains("rustdesk.com") {
+            let s = crate::increase_port(&first, -2);
+            if s == first {
+                return format!("http://{}:{}", s, config::RENDEZVOUS_PORT - 2);
+            } else {
+                return format!("http://{}", s);
+            }
+        }
+    }
     "https://admin.rustdesk.com".to_owned()
 }
 
@@ -1935,7 +1955,29 @@ pub fn check_process(arg: &str, mut same_uid: bool) -> bool {
     false
 }
 
+/// OUR FORK (2026-09-19) — `secure_tcp` handshake is disabled.
+///
+/// The open-source `hbbs`/`hbbr` never sends the server-initiated `KeyExchange`
+/// message this handshake waits for — verified on the wire: a plain TCP connect to
+/// 21116/21117 stays silent (23+ seconds, zero bytes), and `rustdesk/rustdesk-server`
+/// has no server-side implementation of it (this is a RustDesk **Pro**-only feature,
+/// see lejianwen/rustdesk-api issue #92 and upstream commit 22eb19f: "return ok,
+/// because server has not support").
+///
+/// Consequence for a logged-in client (`key` and `token` both non-empty — see
+/// `src/client.rs`): it blocks for `READ_TIMEOUT` (18s) and then aborts **every**
+/// connection with "Failed to secure tcp".
+///
+/// Skipping it restores exactly the not-logged-in behaviour, which is what our
+/// self-hosted OSS server expects. End-to-end encryption between peers is unaffected;
+/// only the extra client↔rendezvous-server hop encryption is omitted (the OSS server
+/// never offered it). Set to `false` to restore upstream behaviour.
+const SKIP_SECURE_TCP_HANDSHAKE: bool = true;
+
 async fn secure_tcp_impl(conn: &mut Stream, key: &str, log_on_success: bool) -> ResultType<()> {
+    if SKIP_SECURE_TCP_HANDSHAKE {
+        return Ok(());
+    }
     // Skip additional encryption when using WebSocket connections (wss://)
     // as WebSocket Secure (wss://) already provides transport layer encryption.
     // This doesn't affect the end-to-end encryption between clients,
