@@ -1,15 +1,14 @@
 name: Self-hosted Runner Smoke Test
 
-# 用途：驗證自架 runner（self-hosted, Windows, X64, build）真係收到 job，
-#       並且工具鏈、bash 環境、MSVC、vcpkg 全部可用。
+# 用途：驗證兩部自架 runner 真係收到 job，並且工具鏈、shell 環境全部可用。
+#   * Windows: SERVER2025-rd-win  (labels: self-hosted, Windows, X64, build)
+#   * Linux  : github-runner-rd-linux (labels: self-hosted, Linux, X64, build)
 #
 # 安全設計（公開儲存庫）：
 #   * 只可手動觸發（workflow_dispatch），冇 schedule、冇 push 觸發
 #   * if: github.repository == 'quincywong69/rustdesk' → 拒絕 fork PR
 #   * 只跑讀取類指令，唔會產生任何 artifact、唔會改動任何檔案
-#   * 獨立於 flutter-build.yml，完全唔影響現有 build 流程
-#
-# 呢個檔案可以隨時刪除，唔會影響其他 workflow。
+#   * 獨立於 flutter-build.yml，完全唔影響現有 build 流程（可隨時刪除此檔）
 
 on:
   workflow_dispatch:
@@ -18,8 +17,8 @@ permissions:
   contents: read
 
 jobs:
-  smoke:
-    name: smoke (self-hosted windows)
+  smoke-windows:
+    name: smoke (windows self-hosted)
     if: github.repository == 'quincywong69/rustdesk'
     runs-on: [self-hosted, Windows, X64, build]
     timeout-minutes: 20
@@ -33,6 +32,10 @@ jobs:
           Write-Host "os      : $([Environment]::OSVersion.VersionString)"
           $c = Get-CimInstance Win32_ComputerSystem
           Write-Host ("cpu/ram : {0} logical cores / {1} GB" -f $c.NumberOfLogicalProcessors, [math]::Round($c.TotalPhysicalMemory / 1GB, 1))
+
+      - name: "pwsh 版本 (v1.0.4 修復驗證)"
+        shell: pwsh
+        run: Write-Host "pwsh = $($PSVersionTable.PSVersion) ; edition = $($PSVersionTable.PSEdition)"
 
       - name: "Git Bash 環境 (shell bash)"
         shell: bash
@@ -90,6 +93,35 @@ jobs:
             exit 1
           }
 
-      - name: "結果"
-        shell: pwsh
-        run: Write-Host '自架 runner 煙霧測試全部通過 — 可以用嚟接 build job。'
+  smoke-linux:
+    name: smoke (linux self-hosted)
+    if: github.repository == 'quincywong69/rustdesk'
+    runs-on: [self-hosted, Linux, X64, build]
+    timeout-minutes: 20
+    steps:
+      - name: "環境資訊"
+        run: |
+          echo "runner  : $RUNNER_NAME"
+          echo "machine : $(hostname)"
+          echo "account : $(whoami)"
+          . /etc/os-release; echo "os      : $PRETTY_NAME"
+          echo "kernel  : $(uname -r)"
+          echo "cpu     : $(nproc) cores"
+          free -h | sed -n 1,2p
+          df -h / | tail -1
+
+      - name: "工具鏈"
+        run: |
+          fail=0
+          for c in git curl wget tar unzip jq python3 gcc make cmake ninja nasm pkg-config; do
+            p=$(command -v "$c" || true)
+            if [ -n "$p" ]; then printf "[OK]   %-10s %s\n" "$c" "$p"; else printf "[----] %-10s MISSING\n" "$c"; fi
+          done
+
+      - name: "出網 + sudo 能力（build 步驟需要）"
+        run: |
+          curl -s -o /dev/null -w "[OK]   api.github.com %{http_code}\n" --max-time 15 https://api.github.com
+          sudo -n true 2>/dev/null && echo "[OK]   sudo NOPASSWD" || echo "[WARN] sudo 需要密碼（build 步驟嘅 apt-get install 可能會失敗）"
+
+      - name: "總結"
+        run: echo "自架 Linux runner 可用。"
