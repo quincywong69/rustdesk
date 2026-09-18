@@ -79,6 +79,22 @@ jobs:
           $out = cmd /c "call `"$vcvars`" >nul 2>&1 && cl 2>&1"
           if ($out -match 'Microsoft') { Write-Host '[OK]   cl.exe 可執行' } else { Write-Host '[FAIL] cl.exe 無法執行'; exit 1 }
 
+      - name: "MSI 建置工具 nuget / msbuild / dotnet（advisory）"
+        shell: pwsh
+        run: |
+          $names = 'nuget','msbuild','dotnet','makensis','vswhere','7z'
+          $cmds  = Get-Command $names -ErrorAction SilentlyContinue
+          foreach ($n in $names) {
+            $hit = $cmds | Where-Object { $_.Name -eq $n } | Select-Object -First 1
+            if ($hit) { Write-Host ("[OK]   {0,-10} {1}" -f $n, $hit.Source) }
+            else      { Write-Host ("[WARN] {0,-10} 唔喺 PATH（MSI 步驟可能失敗）" -f $n) }
+          }
+          $vs = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (Test-Path $vs) {
+            $msb = (& $vs -latest -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' 2>&1 | Out-String).Trim()
+            if ($msb) { Write-Host "[OK]   MSBuild: $msb" } else { Write-Host '[WARN] vswhere 找不到 MSBuild.exe' }
+          }
+
       - name: "vcpkg 目錄可寫 (runner 服務帳號)"
         shell: pwsh
         run: |
