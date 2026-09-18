@@ -139,6 +139,13 @@ jobs:
           Chk 'jq（PATH 解析）' ($null -ne $jqc) $(if ($jqc) { $jqc.Source } else { 'PATH 上找不到 jq（subosito/flutter-action 需要）' })
           Chk '7z（PATH 解析）' ($LASTEXITCODE -eq 0) $(if ($w) { $w } else { 'where.exe 找唔到 7z' })
           $llvm = 'C:\Program Files\LLVM'
+          $hc = 'C:\hostedtoolcache\windows'
+          Chk 'hostedtoolcache junction' (Test-Path $hc) $hc
+          $flroot = Join-Path $hc 'flutter'
+          if (Test-Path $flroot) {
+            $flvers = (Get-ChildItem $flroot -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name) -join ', '
+            Write-Host ("       junction 內 flutter 版本：" + $flvers)
+          }
           Chk 'LLVM 目錄' (Test-Path $llvm) $llvm
           $lib = [Environment]::GetEnvironmentVariable('LIBCLANG_PATH', 'Machine')
           Chk 'LIBCLANG_PATH（機器）' ($lib -eq (Join-Path $llvm 'bin')) $(if ($lib) { $lib } else { '(未設定)' })
