@@ -1,0 +1,95 @@
+name: Self-hosted Runner Smoke Test
+
+# 用途：驗證自架 runner（self-hosted, Windows, X64, build）真係收到 job，
+#       並且工具鏈、bash 環境、MSVC、vcpkg 全部可用。
+#
+# 安全設計（公開儲存庫）：
+#   * 只可手動觸發（workflow_dispatch），冇 schedule、冇 push 觸發
+#   * if: github.repository == 'quincywong69/rustdesk' → 拒絕 fork PR
+#   * 只跑讀取類指令，唔會產生任何 artifact、唔會改動任何檔案
+#   * 獨立於 flutter-build.yml，完全唔影響現有 build 流程
+#
+# 呢個檔案可以隨時刪除，唔會影響其他 workflow。
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: smoke (self-hosted windows)
+    if: github.repository == 'quincywong69/rustdesk'
+    runs-on: [self-hosted, Windows, X64, build]
+    timeout-minutes: 20
+    steps:
+      - name: "環境資訊"
+        shell: pwsh
+        run: |
+          Write-Host "runner  : $env:RUNNER_NAME"
+          Write-Host "machine : $env:COMPUTERNAME"
+          Write-Host "account : $([Security.Principal.WindowsIdentity]::GetCurrent().Name)"
+          Write-Host "os      : $([Environment]::OSVersion.VersionString)"
+          $c = Get-CimInstance Win32_ComputerSystem
+          Write-Host ("cpu/ram : {0} logical cores / {1} GB" -f $c.NumberOfLogicalProcessors, [math]::Round($c.TotalPhysicalMemory / 1GB, 1))
+
+      - name: "Git Bash 環境 (shell bash)"
+        shell: bash
+        run: |
+          echo "bash      : $BASH_VERSION"
+          echo "bash path : $(command -v bash)"
+          echo "sed       : $(command -v sed)"
+          echo "tar       : $(command -v tar)"
+          echo "curl      : $(command -v curl)"
+          echo "--- unzip ---"
+          unzip -v | head -2
+
+      - name: "工具鏈 (runner 服務帳號 PATH 視角)"
+        shell: pwsh
+        run: |
+          $checks = @(
+            @{ n = 'git';     c = 'git --version' },
+            @{ n = 'python3'; c = 'python3 --version' },
+            @{ n = 'cmake';   c = 'cmake --version' },
+            @{ n = 'ninja';   c = 'ninja --version' },
+            @{ n = 'nasm';    c = 'nasm -v' }
+          )
+          foreach ($k in $checks) {
+            try {
+              $out = (Invoke-Expression $k.c 2>&1 | Out-String).Trim() -split "`r?`n" | Select-Object -First 1
+              Write-Host ("[OK]   {0,-8} {1}" -f $k.n, $out)
+            } catch {
+              Write-Host ("[FAIL] {0,-8} {1}" -f $k.n, $_.Exception.Message)
+              exit 1
+            }
+          }
+
+      - name: "MSVC / Windows SDK"
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>&1 | Out-String).Trim()
+          if (-not $vs) { Write-Host '[FAIL] 找不到 MSVC 工具組'; exit 1 }
+          Write-Host "[OK]   MSVC: $vs"
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $out = cmd /c "call `"$vcvars`" >nul 2>&1 && cl 2>&1"
+          if ($out -match 'Microsoft') { Write-Host '[OK]   cl.exe 可執行' } else { Write-Host '[FAIL] cl.exe 無法執行'; exit 1 }
+
+      - name: "vcpkg 目錄可寫 (runner 服務帳號)"
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'C:\vcpkg')) { Write-Host '[WARN] C:\vcpkg 未存在（run-vcpkg 會自行 clone）'; exit 0 }
+          try {
+            $t = Join-Path 'C:\vcpkg' 'runner-write-test.tmp'
+            'ok' | Set-Content -Path $t -ErrorAction Stop
+            Remove-Item $t -Force
+            Write-Host '[OK]   C:\vcpkg 可寫'
+          } catch {
+            Write-Host ("[FAIL] C:\vcpkg 不可寫：{0}" -f $_.Exception.Message)
+            exit 1
+          }
+
+      - name: "結果"
+        shell: pwsh
+        run: Write-Host '自架 runner 煙霧測試全部通過 — 可以用嚟接 build job。'
