@@ -447,12 +447,31 @@ jobs:
         with:
           version: ${{ env.LLVM_VERSION }}
 
+      # OUR FORK (2026-09-19) — fix: this step failed on EVERY build with
+      #   "error: toolchain 'nightly-2023-10-13-i686-pc-windows-msvc' may not be able to
+      #    run on this system ... add the `--force-non-host` flag"
+      # Root cause: newer rustup (>= 1.28, the version now preinstalled on the GitHub
+      # windows runners) REFUSES to install a toolchain whose target triple is not the
+      # machine's host triple. Upstream installed an i686 *host* toolchain on purpose —
+      # the build step below runs a plain `cargo build` with no `--target`, so the
+      # compiler's default target (i686) is what produces the 32-bit Sciter fallback.
+      # We keep that exact behaviour but pass --force-non-host explicitly; if an older
+      # rustup without the flag is ever used again, fall back to the plain install.
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-        with:
-          toolchain: nightly-2023-10-13-${{ matrix.job.target }} # must use nightly here, because of abi_thiscall feature required
-          targets: ${{ matrix.job.target }}
-          components: "rustfmt"
+        shell: pwsh
+        run: |
+          $TC = "nightly-2023-10-13-i686-pc-windows-msvc"
+          $ARGS = "--profile minimal --no-self-update --component rustfmt --target i686-pc-windows-msvc"
+          rustup toolchain install $TC $ARGS.Split(" ") --force-non-host
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::warning::--force-non-host unsupported here, retrying without it"
+            rustup toolchain install $TC $ARGS.Split(" ")
+          }
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          rustup default $TC
+          # informational only — never fail this step over it
+          rustup run $TC rustc --version
+          exit 0
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
