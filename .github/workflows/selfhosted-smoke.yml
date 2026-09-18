@@ -123,5 +123,25 @@ jobs:
           curl -s -o /dev/null -w "[OK]   api.github.com %{http_code}\n" --max-time 15 https://api.github.com
           sudo -n true 2>/dev/null && echo "[OK]   sudo NOPASSWD" || echo "[WARN] sudo 需要密碼（build 步驟嘅 apt-get install 可能會失敗）"
 
+      - name: "host 依賴：sudo /opt/artifacts / swap（模擬 linux build job 前置步驟）"
+        run: |
+          echo "--- 模擬 'Maximize build space' 步驟 ---"
+          sudo rm -rf /opt/ghc /usr/local/lib/android /usr/share/dotnet || true
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nasm qemu-user-static
+          echo "[OK] sudo apt-get 可用"
+          echo "--- /opt/artifacts（run-vcpkg 用）---"
+          if [ -w /opt/artifacts ]; then echo "[OK] /opt/artifacts 可寫（帳號 $USER）"; else echo "[FAIL] /opt/artifacts 不可寫"; exit 1; fi
+          echo "--- 資源 ---"
+          df -h / | tail -1
+          free -m | head -2
+
+      - name: "docker + binfmt（run-on-arch 容器建置必要）"
+        run: |
+          docker version --format 'client={{.Client.Version}} server={{.Server.Version}}' 2>&1 | head -1
+          if docker run --rm hello-world >/dev/null 2>&1; then echo "[OK] docker run 成功"; else echo "[FAIL] docker run 失敗"; exit 1; fi
+          echo "--- binfmt handlers ---"
+          ls /proc/sys/fs/binfmt_misc/ 2>/dev/null | grep -i qemu || echo "[WARN] 未見 qemu binfmt（qemu-user-static 剛裝，可能需 reboot 才註冊）"
+
       - name: "總結"
         run: echo "自架 Linux runner 可用。"
