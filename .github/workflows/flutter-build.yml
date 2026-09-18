@@ -473,6 +473,32 @@ jobs:
           rustup run $TC rustc --version
           exit 0
 
+      # OUR FORK (2026-09-19) — fix #2: after the toolchain install was fixed, the job
+      # progressed further and died in the *build* step instead:
+      #   hwcodec build script -> bindgen -> "Unable to find libclang: couldn't find any
+      #   valid shared libraries matching: ['clang.dll', 'libclang.dll'], set the
+      #   LIBCLANG_PATH environment variable ..."
+      # Root cause: the 32-bit LLVM action above (rustdesk-org/install-llvm-action-32bit)
+      # exports LLVM_PATH / LD_LIBRARY_PATH but NOT LIBCLANG_PATH — which is the variable
+      # bindgen actually reads. Locate the real libclang.dll and export it for later steps.
+      - name: Export LIBCLANG_PATH for bindgen
+        shell: pwsh
+        run: |
+          $cands = @(
+            (Join-Path $env:LLVM_PATH 'bin'),
+            'C:\Program Files\LLVM\bin',
+            'C:\Program Files (x86)\LLVM\bin'
+          ) | Where-Object { $_ -and (Test-Path (Join-Path $_ 'libclang.dll')) }
+          if (-not $cands) {
+            $hit = Get-ChildItem -Path 'C:\Program Files','C:\Program Files (x86)' -Filter 'libclang.dll' -Recurse -Depth 4 -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($hit) { $cands = @($hit.DirectoryName) }
+          }
+          if (-not $cands) { Write-Host '::error::libclang.dll not found — the LLVM step must run first'; exit 1 }
+          $lib = $cands[0]
+          Write-Host "LIBCLANG_PATH=$lib"
+          Add-Content -Path $env:GITHUB_ENV -Value "LIBCLANG_PATH=$lib"
+          Add-Content -Path $env:GITHUB_PATH -Value $lib
+
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           prefix-key: ${{ matrix.job.os }}-sciter
