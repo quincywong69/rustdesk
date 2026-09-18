@@ -133,6 +133,10 @@ jobs:
           $sz = 'C:\Program Files\7-Zip\7z.exe'
           Chk '7-Zip 檔案' (Test-Path $sz) $sz
           $w = (& where.exe 7z 2>&1 | Out-String).Trim()
+          $jqreal = 'C:\jq\jq.exe'
+          Chk 'jq 檔案' (Test-Path $jqreal) $jqreal
+          $jqc = Get-Command jq -ErrorAction SilentlyContinue
+          Chk 'jq（PATH 解析）' ($null -ne $jqc) $(if ($jqc) { $jqc.Source } else { 'PATH 上找不到 jq（subosito/flutter-action 需要）' })
           Chk '7z（PATH 解析）' ($LASTEXITCODE -eq 0) $(if ($w) { $w } else { 'where.exe 找唔到 7z' })
           $llvm = 'C:\Program Files\LLVM'
           Chk 'LLVM 目錄' (Test-Path $llvm) $llvm
