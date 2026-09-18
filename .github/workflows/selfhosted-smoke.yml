@@ -129,7 +129,13 @@ jobs:
         run: |
           $existing = Get-Command 7z -ErrorAction SilentlyContinue
           if ($existing) { Write-Host "[OK] 7z 已存在：$($existing.Source)"; exit 0 }
-          Write-Host '[INFO] 7z 未安裝 → 下載 7-Zip 官方安裝檔'
+
+          # ⚠️ 唔可以裝去 C:\Program Files：runner 服務帳號係 NT AUTHORITY\NETWORK SERVICE
+          #    （冇 admin）→ NSIS 安裝會靜默失敗（2026-09-19 真機實測揭發）。
+          #    改用 runner 自己可寫嘅 tool cache，逐個 job 重裝（1.6 MB，可接受）。
+          $dest = if ($env:RUNNER_TOOL_CACHE) { Join-Path $env:RUNNER_TOOL_CACHE '7zip' } else { Join-Path $env:RUNNER_TEMP '7zip' }
+          New-Item -ItemType Directory -Path $dest -Force | Out-Null
+
           $urls = @(
             'https://www.7-zip.org/a/7z2501-x64.exe',
             'https://www.7-zip.org/a/7z2409-x64.exe'
@@ -143,12 +149,15 @@ jobs:
             } catch { Write-Warning "$u 下載失敗：$($_.Exception.Message)" }
           }
           if (-not $got) { Write-Host '::error::無法下載 7-Zip 安裝檔'; exit 1 }
-          Start-Process -FilePath $out -ArgumentList '/S' -Wait
-          $dir = Join-Path $env:ProgramFiles '7-Zip'
-          if (-not (Test-Path (Join-Path $dir '7z.exe'))) { Write-Host "::error::7-Zip 安裝後找不到 $dir\7z.exe"; exit 1 }
-          Add-Content -Path $env:GITHUB_PATH -Value $dir
-          Write-Host "[OK] 7-Zip 已安裝：$dir（已加入後續步驟 PATH）"
 
+          # NSIS 靜默安裝 + 自訂目錄（/D 必須係最後一個參數、唔可以用引號）
+          $p = Start-Process -FilePath $out -ArgumentList '/S', "/D=$dest" -Wait -PassThru
+          Write-Host "[INFO] 安裝程式結束代碼：$($p.ExitCode)"
+          $exe = Join-Path $dest '7z.exe'
+          for ($i = 0; $i -lt 30 -and -not (Test-Path $exe); $i++) { Start-Sleep -Seconds 1 }
+          if (-not (Test-Path $exe)) { Write-Host "::error::7-Zip 安裝後找不到 $exe"; exit 1 }
+          Add-Content -Path $env:GITHUB_PATH -Value $dest
+          Write-Host "[OK] 7-Zip 已安裝：$dest（已加入後續步驟 PATH）"
       - name: "7-Zip 可用性驗證"
         shell: pwsh
         run: |
