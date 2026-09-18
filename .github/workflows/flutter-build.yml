@@ -125,6 +125,36 @@ jobs:
           name: ${{ matrix.job.arch == 'aarch64' && 'bridge-artifact-flutter-3.44' || 'bridge-artifact' }}
           path: ./
 
+      # ── 自架 runner 補給：7-Zip（2026-09-19 新增）───────────────────────
+      # 失敗實錄：i686 job 喺自架 Windows 機報 `Unable to locate executable file: 7z`
+      # （rustdesk-org/install-llvm-action-32bit 會 exec("7z") 解壓 LLVM-15.0.6-win32.exe）
+      # GitHub 託管 windows 映像已預裝 7-Zip，自架機冇 → 呢一步只喺 self-hosted 執行。
+      - name: Ensure 7-Zip (self-hosted only)
+        if: runner.environment == 'self-hosted'
+        shell: pwsh
+        run: |
+          $existing = Get-Command 7z -ErrorAction SilentlyContinue
+          if ($existing) { Write-Host "[OK] 7z 已存在：$($existing.Source)"; exit 0 }
+          Write-Host '[INFO] 7z 未安裝 → 下載 7-Zip 官方安裝檔'
+          $urls = @(
+            'https://www.7-zip.org/a/7z2501-x64.exe',
+            'https://www.7-zip.org/a/7z2409-x64.exe'
+          )
+          $out = Join-Path $env:TEMP '7zsetup.exe'
+          $got = $false
+          foreach ($u in $urls) {
+            try {
+              Invoke-WebRequest -Uri $u -OutFile $out -UseBasicParsing -TimeoutSec 300
+              $got = $true; Write-Host "[OK] 已下載 $u"; break
+            } catch { Write-Warning "$u 下載失敗：$($_.Exception.Message)" }
+          }
+          if (-not $got) { Write-Host '::error::無法下載 7-Zip 安裝檔'; exit 1 }
+          Start-Process -FilePath $out -ArgumentList '/S' -Wait
+          $dir = Join-Path $env:ProgramFiles '7-Zip'
+          if (-not (Test-Path (Join-Path $dir '7z.exe'))) { Write-Host "::error::7-Zip 安裝後找不到 $dir\7z.exe"; exit 1 }
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+          Write-Host "[OK] 7-Zip 已安裝：$dir（已加入後續步驟 PATH）"
+
       - name: Install LLVM and Clang
         uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0 # v2.0.9
         with:
@@ -445,6 +475,36 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
+
+      # ── 自架 runner 補給：7-Zip（2026-09-19 新增）───────────────────────
+      # 失敗實錄：i686 job 喺自架 Windows 機報 `Unable to locate executable file: 7z`
+      # （rustdesk-org/install-llvm-action-32bit 會 exec("7z") 解壓 LLVM-15.0.6-win32.exe）
+      # GitHub 託管 windows 映像已預裝 7-Zip，自架機冇 → 呢一步只喺 self-hosted 執行。
+      - name: Ensure 7-Zip (self-hosted only)
+        if: runner.environment == 'self-hosted'
+        shell: pwsh
+        run: |
+          $existing = Get-Command 7z -ErrorAction SilentlyContinue
+          if ($existing) { Write-Host "[OK] 7z 已存在：$($existing.Source)"; exit 0 }
+          Write-Host '[INFO] 7z 未安裝 → 下載 7-Zip 官方安裝檔'
+          $urls = @(
+            'https://www.7-zip.org/a/7z2501-x64.exe',
+            'https://www.7-zip.org/a/7z2409-x64.exe'
+          )
+          $out = Join-Path $env:TEMP '7zsetup.exe'
+          $got = $false
+          foreach ($u in $urls) {
+            try {
+              Invoke-WebRequest -Uri $u -OutFile $out -UseBasicParsing -TimeoutSec 300
+              $got = $true; Write-Host "[OK] 已下載 $u"; break
+            } catch { Write-Warning "$u 下載失敗：$($_.Exception.Message)" }
+          }
+          if (-not $got) { Write-Host '::error::無法下載 7-Zip 安裝檔'; exit 1 }
+          Start-Process -FilePath $out -ArgumentList '/S' -Wait
+          $dir = Join-Path $env:ProgramFiles '7-Zip'
+          if (-not (Test-Path (Join-Path $dir '7z.exe'))) { Write-Host "::error::7-Zip 安裝後找不到 $dir\7z.exe"; exit 1 }
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+          Write-Host "[OK] 7-Zip 已安裝：$dir（已加入後續步驟 PATH）"
 
       - name: Install LLVM and Clang
         uses: rustdesk-org/install-llvm-action-32bit@6aa7d9ad3df84dff01cd4596dd0fc880a7f47fce # no release tag; commit 2026-05-26
