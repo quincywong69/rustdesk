@@ -319,6 +319,30 @@ jobs:
           curl -s -o /dev/null -w "[OK]   api.github.com %{http_code}\n" --max-time 15 https://api.github.com
           sudo -n true 2>/dev/null && echo "[OK]   sudo NOPASSWD" || echo "[WARN] sudo 需要密碼（build 步驟嘅 apt-get install 可能會失敗）"
 
+      - name: "runner pre-job hook + workspace 權限（防 checkout EACCES）"
+        run: |
+          fail=0
+          H="$HOME/actions-runner/rd-job-started.sh"
+          if [ -x "$H" ]; then echo "[OK]   pre-job hook $H"; else echo "[MISS] pre-job hook $H ← 容器留低嘅檔案會令下一個 job checkout 失敗"; fail=$((fail+1)); fi
+          if grep -q '^ACTIONS_RUNNER_HOOK_JOB_STARTED=' "$HOME/actions-runner/.env" 2>/dev/null; then
+            echo "[OK]   .env 已設定：$(grep '^ACTIONS_RUNNER_HOOK_JOB_STARTED=' "$HOME/actions-runner/.env")"
+          else
+            echo "[MISS] .env 冇 ACTIONS_RUNNER_HOOK_JOB_STARTED ← hook 唔會執行"; fail=$((fail+1))
+          fi
+          # 真正嘅判據：workspace 內有冇 ghadmin 刪唔到嘅目錄
+          W="$HOME/actions-runner/_work"
+          if [ -d "$W" ]; then
+            n=$(find "$W" -type d ! -writable 2>/dev/null | wc -l)
+            echo "[INFO] _work 內 ghadmin 冇寫入權嘅目錄數 = $n"
+            if [ "$n" -gt 0 ]; then
+              echo "[MISS] 有 $n 個目錄刪唔到 → checkout 會報 EACCES（hook 應該已修復，請人手 chown/chmod）"; fail=$((fail+1))
+            else
+              echo "[OK]   workspace 全部可寫"
+            fi
+          fi
+          [ "$fail" -gt 0 ] && { echo "::error::runner hook / workspace 權限有 $fail 項問題"; exit 1; }
+          echo "pre-job hook 與 workspace 權限正常。"
+
       - name: "host 依賴：sudo /opt/artifacts / swap（模擬 linux build job 前置步驟）"
         run: |
           echo "--- 模擬 'Maximize build space' 步驟 ---"
