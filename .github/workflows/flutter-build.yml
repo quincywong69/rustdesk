@@ -9,11 +9,12 @@ on:
       upload-tag:
         type: string
         default: "nightly"
-    secrets:
-      # Runner fallback（方案 A）用：fine-grained PAT（Administration: read-only）。
-      # 唔設都跑得（維持用自架 runner）；三個 caller 都係 secrets: inherit 傳落嚟。
-      RUNNER_PROBE_PAT:
-        required: false
+    # 註：decide-runners（runner fallback）用嘅 secret 係 RUNNER_PROBE_PAT，
+    # 由三個 caller（flutter-nightly / flutter-tag / flutter-ci）以 `secrets: inherit`
+    # 傳落嚟，所以唔喺呢度聲明。2026-09-19 實測確認：workflow_call 即使只聲明部分
+    # secret，`secrets: inherit` 一樣會將未聲明嘅 secret（例如 RENDEZVOUS_SERVER、
+    # RS_PUB_KEY）傳到 callee；反之喺呢度聲明會令 actionlint 對其餘 secret 全部報錯，
+    # 所以刻意保持不聲明 —— 冇設 secret 時 down-stream 只會出 warning 並沿用自架 runner。
 
 # NOTE: F-Droid builder script 'flutter/build_fdroid.sh' reads environment
 # variables from this workflow!
