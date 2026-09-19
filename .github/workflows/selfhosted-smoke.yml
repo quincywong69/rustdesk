@@ -297,7 +297,8 @@ jobs:
           #        `libtool` 本身係每個 project 由 configure 生成（兩部機都係咁，唔算缺失）。
           for c in git curl wget tar unzip zip jq python3 gcc make cmake ninja nasm pkg-config \
                    autoconf automake libtoolize m4 clang llvm-config \
-                   gdk-pixbuf-query-loaders patchelf desktop-file-validate; do
+                   gdk-pixbuf-query-loaders gtk-update-icon-cache glib-compile-schemas \
+                   update-mime-database desktop-file-validate patchelf bsdtar gst-launch-1.0; do
             p=$(command -v "$c" || true)
             if [ -n "$p" ]; then printf "[OK]   %-12s %s\n" "$c" "$p"; else printf "[MISS] %-12s ← 會令 vcpkg/bindgen 建置失敗\n" "$c"; fail=$((fail+1)); fi
           done
