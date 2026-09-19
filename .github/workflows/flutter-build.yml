@@ -2047,7 +2047,16 @@ jobs:
             res/rustdesk-${{ env.VERSION }}*.zst
 
   build-rustdesk-linux-sciter:
-    if: ${{ inputs.upload-artifact }}
+    # 2026-09-20（兔兔批准「Linux 其餘 job 逐個切自架」）：
+    #   • runs-on 改由 decide-runners 動態決定（自架 Linux online → ["self-hosted","linux","x64","build"]，
+    #     否則回落 "ubuntu-22.04"）—— 同 build-rustdesk-linux 一致嘅方案 A fallback。
+    #   • 加 fork-PR 守門（自架 runner 絕不可跑 fork PR）＋ 保留原本 inputs.upload-artifact 條件。
+    #   ⛔ 回復方法：把 on 改回 ubuntu-22.04、移除 needs 內嘅 decide-runners、if 還原成 ${{ inputs.upload-artifact }}。
+    needs: [decide-runners]
+    if: >-
+      inputs.upload-artifact &&
+      github.repository == 'quincywong69/rustdesk' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ${{ matrix.job.on }}
     name: build-rustdesk-linux-sciter ${{ matrix.job.target }}
     strategy:
@@ -2058,7 +2067,7 @@ jobs:
           - {
               arch: x86_64,
               target: x86_64-unknown-linux-gnu,
-              on: ubuntu-22.04,
+              on: "${{ fromJSON(needs.decide-runners.outputs.linux_x64) }}",
               distro: ubuntu18.04,
               deb_arch: amd64,
               sciter_arch: x64,
@@ -2300,9 +2309,16 @@ jobs:
 
   build-appimage:
     name: Build appimage ${{ matrix.job.target }}
-    needs: [build-rustdesk-linux]
-    runs-on: ubuntu-22.04
-    if: ${{ inputs.upload-artifact }}
+    # 2026-09-20（兔兔批准）：runs-on 改由 decide-runners 動態決定 + 加 fork-PR 守門。
+    # 依賴：job 自己用 sudo apt 安裝 libarchive-tools / libfuse2（自架機有 NOPASSWD sudo），
+    # 主機須有 /dev/fuse（已喺 5 部 runner 實測存在）。
+    # ⛔ 回復方法：runs-on 改回 ubuntu-22.04、移除 needs 內嘅 decide-runners、if 還原成 ${{ inputs.upload-artifact }}。
+    needs: [decide-runners, build-rustdesk-linux]
+    runs-on: ${{ fromJSON(needs.decide-runners.outputs.linux_x64) }}
+    if: >-
+      inputs.upload-artifact &&
+      github.repository == 'quincywong69/rustdesk' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     strategy:
       fail-fast: false
       matrix:
@@ -2352,11 +2368,19 @@ jobs:
 
   build-flatpak:
     name: Build flatpak ${{ matrix.job.target }}${{ matrix.job.suffix }}
+    # 2026-09-20（兔兔批准）：runs-on 改由 decide-runners 動態決定 + 加 fork-PR 守門。
+    # 依賴：run-on-arch-action 要 docker（5 部 runner 實測 docker + daemon OK）；
+    # flatpak/flatpak-builder 由容器內 apt 安裝；需 unprivileged_userns（實測 = 1）。
+    # ⛔ 回復方法：matrix 內 on 改回 ubuntu-22.04、移除 needs 內嘅 decide-runners、if 還原成 ${{ inputs.upload-artifact }}。
     needs:
+      - decide-runners
       - build-rustdesk-linux
       - build-rustdesk-linux-sciter
     runs-on: ${{ matrix.job.on }}
-    if: ${{ inputs.upload-artifact }}
+    if: >-
+      inputs.upload-artifact &&
+      github.repository == 'quincywong69/rustdesk' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     strategy:
       fail-fast: false
       matrix:
@@ -2365,14 +2389,14 @@ jobs:
               target: x86_64-unknown-linux-gnu,
               # https://github.com/ostreedev/ostree/commit/4bac96a8c817beda37448f9b8c662162bb619981
               distro: ubuntu22.04,
-              on: ubuntu-22.04,
+              on: "${{ fromJSON(needs.decide-runners.outputs.linux_x64) }}",
               arch: x86_64,
               suffix: "",
             }
           - {
               target: x86_64-unknown-linux-gnu,
               distro: ubuntu22.04,
-              on: ubuntu-22.04,
+              on: "${{ fromJSON(needs.decide-runners.outputs.linux_x64) }}",
               arch: x86_64,
               suffix: "-sciter",
             }

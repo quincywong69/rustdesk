@@ -305,6 +305,11 @@ jobs:
             [ -e "$h" ] && echo "[OK]   $h" || { echo "[MISS] $h"; fail=$((fail+1)); }
           done
           ls -d /usr/lib/llvm-*/lib/libclang.so 2>/dev/null | head -2 || echo "[WARN] 未見 libclang.so（bindgen 需要）"
+          # 2026-09-20：appimage job 用 appimage-builder（FUSE 掛載）—— /dev/fuse 係**裝置**，
+          # 唔可以靠 apt 補，一定要主機層面有，所以列為硬性斷言。
+          echo "--- FUSE（appimage job 用）---"
+          [ -e /dev/fuse ] && echo "[OK]   /dev/fuse" || { echo "[MISS] /dev/fuse ← appimage job 會失敗"; fail=$((fail+1)); }
+          command -v fusermount >/dev/null && echo "[OK]   fusermount" || { echo "[MISS] fusermount"; fail=$((fail+1)); }
           [ "$fail" -gt 0 ] && { echo "::error::有 $fail 項建置依賴缺失"; exit 1; }
           echo "建置依賴齊備。"
 
