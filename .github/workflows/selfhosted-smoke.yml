@@ -298,7 +298,8 @@ jobs:
           for c in git curl wget tar unzip zip jq python3 gcc make cmake ninja nasm pkg-config \
                    autoconf automake libtoolize m4 clang llvm-config \
                    gdk-pixbuf-query-loaders gtk-update-icon-cache glib-compile-schemas \
-                   update-mime-database desktop-file-validate patchelf bsdtar gst-launch-1.0; do
+                   update-mime-database desktop-file-validate patchelf bsdtar gst-launch-1.0 \
+                   mksquashfs zsyncmake readelf; do
             p=$(command -v "$c" || true)
             if [ -n "$p" ]; then printf "[OK]   %-12s %s\n" "$c" "$p"; else printf "[MISS] %-12s ← 會令 vcpkg/bindgen 建置失敗\n" "$c"; fail=$((fail+1)); fi
           done
