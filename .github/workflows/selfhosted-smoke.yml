@@ -284,7 +284,9 @@ jobs:
       - name: "工具鏈"
         run: |
           fail=0
-          for c in git curl wget tar unzip jq python3 gcc make cmake ninja nasm pkg-config; do
+          # ⚠️ 2026-09-20：`zip` 係 vcpkg bootstrap-vcpkg.sh 硬性需要（同 curl/unzip/tar 一齊），
+          #    缺咗會令 linux job 喺「Setup vcpkg」步驟失敗（實例：nightly #108）。
+          for c in git curl wget tar unzip zip jq python3 gcc make cmake ninja nasm pkg-config; do
             p=$(command -v "$c" || true)
             if [ -n "$p" ]; then printf "[OK]   %-10s %s\n" "$c" "$p"; else printf "[----] %-10s MISSING\n" "$c"; fi
           done
