@@ -26,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        machine: [win-01, win-02, win-04]   # TEMP 2026-09-20: win-04 added to validate the v1.0.21 one-click installer end-to-end; revert to [win-01, win-02] after
+        machine: [win-01, win-02]   # 2026-09-20：機隊精簡至 2 部（32 位停建後只剩 1 個 Windows job）；win-04 已用 v1.0.21 一鍵安裝實測通過後移除
     runs-on: [self-hosted, Windows, X64, build, "${{ matrix.machine }}"]
     timeout-minutes: 20
     steps:
