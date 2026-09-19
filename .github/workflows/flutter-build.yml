@@ -155,8 +155,13 @@ jobs:
   build-for-windows-flutter:
     name: ${{ matrix.job.target }}
     needs: [decide-runners, build-RustDeskTempTopMostWindow, generate-bridge]
-    # 只喺本 repo 跑（自架 runner 掛喺 quincywong69/rustdesk，唔接受 fork PR）
-    if: github.repository == 'quincywong69/rustdesk'
+    # 只喺本 repo 跑（自架 runner 掛喺 quincywong69/rustdesk，唔接受 fork PR）。
+    # ⚠️ 單靠 github.repository 唔夠：fork PR 嘅 base repo 一樣係 quincywong69/rustdesk
+    # → 一定要另外排除 head repo 唔同嘅 PR，否則外部 PR 嘅程式碼會喺我哋內網嘅自架 runner 執行
+    #（secrets 唔會傳落 fork PR，但 code 會真跑，可以橫向進入內網）。
+    if: >-
+      github.repository == 'quincywong69/rustdesk' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     # 每個 matrix entry 都明確指定 runner（自架 or GitHub 托管）
     runs-on: ${{ matrix.job.runner }}
     strategy:
@@ -488,8 +493,10 @@ jobs:
   build-for-windows-sciter:
     name: ${{ matrix.job.target }} (${{ matrix.job.os }})
     needs: [decide-runners]
-    # 只喺本 repo 跑（自架 runner 掛喺 quincywong69/rustdesk，唔接受 fork PR）
-    if: github.repository == 'quincywong69/rustdesk'
+    # 只喺本 repo 跑 + 排除 fork PR（同 build-for-windows-flutter 一樣嘅守門）
+    if: >-
+      github.repository == 'quincywong69/rustdesk' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     # 每個 matrix entry 都明確指定 runner
     runs-on: ${{ matrix.job.runner }}
     # Temporarily disable this action due to additional test is needed.
@@ -1656,8 +1663,10 @@ jobs:
   build-rustdesk-linux:
     needs: [decide-runners, generate-bridge]
     name: build rustdesk linux ${{ matrix.job.target }}
-    # 只喺本 repo 跑（自架 runner 掛喺 quincywong69/rustdesk，唔接受 fork PR）
-    if: github.repository == 'quincywong69/rustdesk'
+    # 只喺本 repo 跑 + 排除 fork PR（同 windows job 一樣嘅守門）
+    if: >-
+      github.repository == 'quincywong69/rustdesk' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ${{ matrix.job.on }}
     strategy:
       fail-fast: false
