@@ -53,7 +53,10 @@ jobs:
           echo "tar       : $(command -v tar)"
           echo "curl      : $(command -v curl)"
           echo "--- unzip ---"
-          unzip -v | head -2
+          # 2026-09-19：呢一步用 `-e -o pipefail` 執行，`unzip -v | head -2` 會令 unzip
+          # 收到 SIGPIPE（exit 141）→ 整步紅燈（win-01 曾因此誤報失敗）。
+          # 加 `|| true` 令「head 提早收線」唔算錯。
+          unzip -v 2>/dev/null | head -2 || true
 
       - name: "工具鏈 (runner 服務帳號 PATH 視角)"
         shell: pwsh
