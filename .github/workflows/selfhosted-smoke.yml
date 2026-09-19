@@ -26,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        machine: [win-01, win-02, win-03, win-04]
+        machine: [win-01, win-02]   # 2026-09-20：win-03/04 已移除 runner 註冊（32 位停建後只剩 1 個 Windows job → 機隊精簡至 2 部）；要重新加入用 Run-07
     runs-on: [self-hosted, Windows, X64, build, "${{ matrix.machine }}"]
     timeout-minutes: 20
     steps:
