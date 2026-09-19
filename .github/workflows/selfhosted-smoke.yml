@@ -284,12 +284,23 @@ jobs:
       - name: "工具鏈"
         run: |
           fail=0
-          # ⚠️ 2026-09-20：`zip` 係 vcpkg bootstrap-vcpkg.sh 硬性需要（同 curl/unzip/tar 一齊），
-          #    缺咗會令 linux job 喺「Setup vcpkg」步驟失敗（實例：nightly #108）。
-          for c in git curl wget tar unzip zip jq python3 gcc make cmake ninja nasm pkg-config; do
+          # ⚠️ 2026-09-20：呢個清單係被真實 nightly 紅燈教返嚟嘅 —— 每中一次就加一項：
+          #    `zip`      → vcpkg bootstrap-vcpkg.sh（同 curl/unzip/tar 一齊）需要，缺 → Setup vcpkg 紅
+          #    `autoconf` → vcpkg port mfx-dispatch（ffmpeg 嘅 QSV）需要，缺 → Install vcpkg dependencies 紅
+          #    註：用 `libtoolize` 而唔係 `libtool` —— Debian 嘅 libtool 套件只提供 libtoolize，
+          #        `libtool` 本身係每個 project 由 configure 生成（兩部機都係咁，唔算缺失）。
+          for c in git curl wget tar unzip zip jq python3 gcc make cmake ninja nasm pkg-config \
+                   autoconf automake libtoolize m4 clang llvm-config; do
             p=$(command -v "$c" || true)
-            if [ -n "$p" ]; then printf "[OK]   %-10s %s\n" "$c" "$p"; else printf "[----] %-10s MISSING\n" "$c"; fi
+            if [ -n "$p" ]; then printf "[OK]   %-12s %s\n" "$c" "$p"; else printf "[MISS] %-12s ← 會令 vcpkg/bindgen 建置失敗\n" "$c"; fail=$((fail+1)); fi
           done
+          echo "--- X11 / LLVM 標頭（ffmpeg libva + bindgen 用）---"
+          for h in /usr/include/X11/Xlib.h /usr/include/xcb/xcb.h; do
+            [ -e "$h" ] && echo "[OK]   $h" || { echo "[MISS] $h"; fail=$((fail+1)); }
+          done
+          ls -d /usr/lib/llvm-*/lib/libclang.so 2>/dev/null | head -2 || echo "[WARN] 未見 libclang.so（bindgen 需要）"
+          [ "$fail" -gt 0 ] && { echo "::error::有 $fail 項建置依賴缺失"; exit 1; }
+          echo "建置依賴齊備。"
 
       - name: "出網 + sudo 能力（build 步驟需要）"
         run: |
