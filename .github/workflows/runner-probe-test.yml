@@ -10,7 +10,6 @@ jobs:
     name: probe runners endpoint
     runs-on: ubuntu-latest
     permissions:
-      administration: read
       contents: read
       actions: read
     steps:
