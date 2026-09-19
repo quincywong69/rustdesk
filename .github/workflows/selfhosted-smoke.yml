@@ -167,6 +167,12 @@ jobs:
           if ($r) { Write-Host ("       rustup = " + (& rustup -V 2>&1 | Select-Object -First 1)) }
           $c = Get-Command cargo -ErrorAction SilentlyContinue
           Chk 'cargo（PATH 解析）' ($null -ne $c) $(if ($c) { $c.Source } else { 'PATH 上找不到 cargo' })
+          # 2026-09-20：Build msi 需要 SuppressValidation=true（WiX ICE 驗證跳過）。
+          # 兩個獨立斷言：(a) 機器層有設定 (b) job process 真係繼承到 ——
+          # 只驗 (a) 唔夠：服務唔重啟嘅話環境變數唔會傳入 job，msi 照樣爆 WIX0217。
+          $svm = [Environment]::GetEnvironmentVariable('SuppressValidation', 'Machine')
+          Chk 'SuppressValidation（機器）' ($svm -eq 'true') $(if ($svm) { $svm } else { '(未設定) → Build msi 會爆 WIX0217' })
+          Chk 'SuppressValidation（job 繼承）' ($env:SuppressValidation -eq 'true') $(if ($env:SuppressValidation) { $env:SuppressValidation } else { 'job 內冇繼承 → runner 服務未重啟？（請跑 Run-06）' })
           if ($fail -gt 0) { Write-Host "::error::有 $fail 項環境核對失敗"; exit 1 }
           Write-Host '機器層面環境全部通過。'
 
