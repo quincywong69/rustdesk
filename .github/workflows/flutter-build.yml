@@ -493,10 +493,21 @@ jobs:
   build-for-windows-sciter:
     name: ${{ matrix.job.target }} (${{ matrix.job.os }})
     needs: [decide-runners]
-    # 只喺本 repo 跑 + 排除 fork PR（同 build-for-windows-flutter 一樣嘅守門）
-    if: >-
-      github.repository == 'quincywong69/rustdesk' &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    # ⛔ 2026-09-20 停用（兔兔決定「我不需要使用 32 bit，是不是可以直接不 build」→「好」）：
+    #    唔再建 32 位（i686）Windows Sciter 版。理由：現場冇 32 位 Windows 機器；
+    #    同時呢個產物嘅 server 注入驗證有疑點（windows-x86/rustdesk.exe 掃唔到
+    #    https://rdapi.inet-tech.cn，見 tasklist R034）。
+    # 影響：release 唔再更新 rustdesk-<ver>-x86-sciter.exe；unsigned.tar.gz 唔再包 windows-x86/。
+    # 回復方法：① 將下面 `if: false` 改回原本嘅 fork 守門（原文保留在本註解）：
+    #   if: >-
+    #     github.repository == 'quincywong69/rustdesk' &&
+    #     (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    # ② 還原 publish_unsigned 內 windows-x86 嘅 download-artifact 步驟同 tar 參數（見該處 ⛔ 註解）。
+    if: false
+    # 原本嘅 fork 守門（已由上面 if: false 取代，回復時用返）：
+    # if: >-
+    #   github.repository == 'quincywong69/rustdesk' &&
+    #   (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     # 每個 matrix entry 都明確指定 runner
     runs-on: ${{ matrix.job.runner }}
     # Temporarily disable this action due to additional test is needed.
@@ -1134,15 +1145,19 @@ jobs:
           name: rustdesk-unsigned-windows-x86_64
           path: ./windows-x86_64/
 
-      - name: Download Artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: rustdesk-unsigned-windows-x86
-          path: ./windows-x86/
+      # ⛔ 2026-09-20 停用：build-for-windows-sciter（i686 32 位）已停建 → 冇
+      #    rustdesk-unsigned-windows-x86 呢個 artifact，下載必定失敗，所以整步移除。
+      #    回復 32 位建置時，將以下步驟復原（同埋 tar 參數加返 windows-x86）。
+      # - name: Download Artifacts
+      #   uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      #   with:
+      #     name: rustdesk-unsigned-windows-x86
+      #     path: ./windows-x86/
 
       - name: Combine unsigned app
         run: |
-          tar czf rustdesk-${{ env.VERSION }}-unsigned.tar.gz *.dmg windows-x86_64 windows-x86
+          # 2026-09-20：移除 windows-x86（32 位已停建）。
+          tar czf rustdesk-${{ env.VERSION }}-unsigned.tar.gz *.dmg windows-x86_64
 
       - name: Publish unsigned app
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
