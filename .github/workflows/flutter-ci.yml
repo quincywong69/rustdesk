@@ -20,5 +20,7 @@ on:
 jobs:
   run-ci:
     uses: ./.github/workflows/flutter-build.yml
+    # flutter-build.yml 嘅 decide-runners job 需要 RUNNER_PROBE_PAT（runner fallback 用）
+    secrets: inherit
     with:
       upload-artifact: false

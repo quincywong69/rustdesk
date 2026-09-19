@@ -9,6 +9,11 @@ on:
       upload-tag:
         type: string
         default: "nightly"
+    secrets:
+      # Runner fallback（方案 A）用：fine-grained PAT（Administration: read-only）。
+      # 唔設都跑得（維持用自架 runner）；三個 caller 都係 secrets: inherit 傳落嚟。
+      RUNNER_PROBE_PAT:
+        required: false
 
 # NOTE: F-Droid builder script 'flutter/build_fdroid.sh' reads environment
 # variables from this workflow!
@@ -53,6 +58,75 @@ env:
   SIGN_BASE_URL: "${{ secrets.SIGN_BASE_URL }}-2"
 
 jobs:
+  # ===== Runner fallback（方案 A，2026-09-19，兔兔批准）=====
+  # 先探測自架 runner 是否 online，再決定下游 job 用自架定 GitHub 托管 runner：
+  #   自架 online   → ["self-hosted", ...]（快、有 vcpkg / tool cache）
+  #   自架全 offline → 退回 GitHub 托管（windows-2022 / ubuntu-22.04）
+  # 需要 repo secret RUNNER_PROBE_PAT（fine-grained PAT，Administration: read-only）：
+  #   未設定          → 維持原行為（用自架 runner），出 warning
+  #   有設定但查詢失敗 → 保守改用託管 runner，出 warning
+  # ⛔ 唔想用 fallback 時：刪去這個 job，並還原下面三個 job 嘅 needs 及
+  #    matrix entry 嘅 runner/on 字面值（每處都有註解標明）。
+  decide-runners:
+    name: decide runners
+    runs-on: ubuntu-latest
+    outputs:
+      windows_x64: ${{ steps.probe.outputs.windows_x64 }}
+      linux_x64: ${{ steps.probe.outputs.linux_x64 }}
+    steps:
+      - name: Probe self-hosted runner availability
+        id: probe
+        env:
+          PROBE_PAT: ${{ secrets.RUNNER_PROBE_PAT }}
+        run: |
+          set -uo pipefail
+          SELF_WIN='["self-hosted","Windows","X64","build"]'
+          SELF_LINUX='["self-hosted","linux","x64","build"]'
+          HOSTED_WIN='"windows-2022"'
+          HOSTED_LINUX='"ubuntu-22.04"'
+
+          win="$SELF_WIN"
+          linux="$SELF_LINUX"
+
+          if [ -z "${PROBE_PAT:-}" ]; then
+            echo "::warning::RUNNER_PROBE_PAT 未設定 → runner fallback 停用，繼續使用自架 runner。"
+          else
+            body="$(mktemp)"
+            code="$(curl -sS -o "$body" -w '%{http_code}' \
+              -H "Authorization: Bearer ${PROBE_PAT}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runners?per_page=100")" || code="000"
+            echo "GitHub runners API HTTP ${code}"
+            head -c 600 "$body" || true
+            echo
+            if [ "${code}" = "200" ]; then
+              jq -r '.runners[] | "  \(.name)\t\(.status)\t\([.labels[].name] | join(","))"' "$body" || true
+              win_online="$(jq '[.runners[] | select(.status == "online") | select(([.labels[].name] | map(ascii_downcase)) | index("windows"))] | length' "$body" 2>/dev/null)" || win_online=""
+              linux_online="$(jq '[.runners[] | select(.status == "online") | select(([.labels[].name] | map(ascii_downcase)) | index("linux"))] | length' "$body" 2>/dev/null)" || linux_online=""
+              echo "online windows runners = ${win_online:-unknown}, online linux runners = ${linux_online:-unknown}"
+              if [ "${win_online:-0}" = "0" ]; then
+                win="$HOSTED_WIN"
+                echo "::warning::冇 Windows 自架 runner online → windows x64 job 改用 windows-2022。"
+              fi
+              if [ "${linux_online:-0}" = "0" ]; then
+                linux="$HOSTED_LINUX"
+                echo "::warning::冇 Linux 自架 runner online → linux x64 job 改用 ubuntu-22.04。"
+              fi
+            else
+              win="$HOSTED_WIN"
+              linux="$HOSTED_LINUX"
+              echo "::warning::查詢 runner 狀態失敗（HTTP ${code}）→ 保守改用 GitHub 托管 runner。"
+            fi
+          fi
+
+          {
+            echo "windows_x64=$win"
+            echo "linux_x64=$linux"
+          } >> "$GITHUB_OUTPUT"
+          echo "DECISION windows_x64=$win"
+          echo "DECISION linux_x64=$linux"
+
   generate-bridge:
     uses: ./.github/workflows/bridge.yml
 
@@ -79,7 +153,7 @@ jobs:
 
   build-for-windows-flutter:
     name: ${{ matrix.job.target }}
-    needs: [build-RustDeskTempTopMostWindow, generate-bridge]
+    needs: [decide-runners, build-RustDeskTempTopMostWindow, generate-bridge]
     # 只喺本 repo 跑（自架 runner 掛喺 quincywong69/rustdesk，唔接受 fork PR）
     if: github.repository == 'quincywong69/rustdesk'
     # 每個 matrix entry 都明確指定 runner（自架 or GitHub 托管）
@@ -93,9 +167,10 @@ jobs:
           - {
               target: x86_64-pc-windows-msvc,
               os: windows-2022,
-              # 2026-09-19: 改用自架 runner（SERVER2025-rd-win = GITHUB-RUNNER）。
-              # 回復方法：刪去下面 runner: 一行，即回退到 GitHub 托管 windows-2022。
-              runner: [self-hosted, Windows, X64, build],
+              # 2026-09-19: 改用自架 runner；2026-09-19 晚（方案 A）改為由 decide-runners 動態決定
+              # —— 自架 runner online 用 ["self-hosted","Windows","X64","build"]，全 offline 用 "windows-2022"。
+              # 回復方法：改回 runner: [self-hosted, Windows, X64, build], 並移除 needs 內嘅 decide-runners。
+              runner: "${{ fromJSON(needs.decide-runners.outputs.windows_x64) }}",
               arch: x86_64,
               flutter-arch: x64,
               vcpkg-triplet: x64-windows-static,
@@ -411,6 +486,7 @@ jobs:
   # The fallback for the flutter version, we use Sciter for 32bit Windows.
   build-for-windows-sciter:
     name: ${{ matrix.job.target }} (${{ matrix.job.os }})
+    needs: [decide-runners]
     # 只喺本 repo 跑（自架 runner 掛喺 quincywong69/rustdesk，唔接受 fork PR）
     if: github.repository == 'quincywong69/rustdesk'
     # 每個 matrix entry 都明確指定 runner
@@ -426,9 +502,9 @@ jobs:
           - {
               target: i686-pc-windows-msvc,
               os: windows-2022,
-              # 2026-09-19: 改用自架 runner（SERVER2025-rd-win）。
-              # 回復方法：刪去下面 runner: 一行，即回退到 GitHub 托管 windows-2022。
-              runner: [self-hosted, Windows, X64, build],
+              # 2026-09-19: 改用自架 runner；2026-09-19 晚（方案 A）改為由 decide-runners 動態決定。
+              # 回復方法：改回 runner: [self-hosted, Windows, X64, build], 並移除 needs 內嘅 decide-runners。
+              runner: "${{ fromJSON(needs.decide-runners.outputs.windows_x64) }}",
               arch: x86,
               vcpkg-triplet: x86-windows-static,
             }
@@ -1577,7 +1653,7 @@ jobs:
             signed-apk/rustdesk-${{ env.VERSION }}-universal${{ env.suffix }}.apk
 
   build-rustdesk-linux:
-    needs: [generate-bridge]
+    needs: [decide-runners, generate-bridge]
     name: build rustdesk linux ${{ matrix.job.target }}
     # 只喺本 repo 跑（自架 runner 掛喺 quincywong69/rustdesk，唔接受 fork PR）
     if: github.repository == 'quincywong69/rustdesk'
@@ -1591,9 +1667,10 @@ jobs:
               arch: x86_64,
               target: x86_64-unknown-linux-gnu,
               distro: ubuntu18.04,
-              # 2026-09-19: 由 ubuntu-22.04 改為自架 runner（github-runner-rd-linux @192.168.95.211）
-              # 回復方法：將下面一行改回 on: ubuntu-22.04
-              on: [self-hosted, linux, x64, build],
+              # 2026-09-19: 由 ubuntu-22.04 改為自架 runner；2026-09-19 晚（方案 A）
+              # 改為由 decide-runners 動態決定（自架 online → ["self-hosted","linux","x64","build"]，否則 "ubuntu-22.04"）。
+              # 回復方法：改回 on: [self-hosted, linux, x64, build], 並移除 needs 內嘅 decide-runners。
+              on: "${{ fromJSON(needs.decide-runners.outputs.linux_x64) }}",
               deb_arch: amd64,
               vcpkg-triplet: x64-linux,
             }
