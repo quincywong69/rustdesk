@@ -1,11 +1,14 @@
 name: Self-hosted Runner Smoke Test
 
 # 用途：驗證自架 runner 真係收到 job，並且工具鏈、shell 環境全部可用。
-#   * Windows: 四部（GH-RUNNER-01..04-rd-win）—— 用 matrix 經 per-machine label
-#              (win-01 / win-02 / win-03 / win-04) **分別**驗證，唔會隨機只驗一部
-#              2026-09-19 晚擴大：新增 win-03 / win-04（192.168.95.203 / .204）。
+#   * Windows: 兩部（GH-RUNNER-01-win / GH-RUNNER-02-win）—— 用 matrix 經 per-machine label
+#              (win-01 / win-02) **分別**驗證，唔會隨機只驗一部
+#              2026-09-20 機隊精簡：win-03 / win-04（.203 / .204）runner 註冊已移除，
+#              matrix 收窄為 [win-01, win-02]（唔收窄嘅話已移除嘅 label 會永遠排隊）。
+#              同日兩部改名：GH-RUNNER-0N-rd-win → GH-RUNNER-0N-win（重新註冊，label 不變）。
 #              呢兩個 label 由 GitHub API 加落 runner（唔需要改機），新增機器時照做即可。
-#   * Linux  : github-runner-rd-linux (labels: self-hosted, Linux, X64, build)
+#   * Linux  : github-runner-01-linux / github-runner-02-linux (labels: self-hosted, Linux, X64, build)
+#              2026-09-20 機隊精簡：.221–.224 四個 runner 註冊已移除，Linux 只剩呢兩部。
 #
 # 安全設計（公開儲存庫）：
 #   * 只可手動觸發（workflow_dispatch），冇 schedule、冇 push 觸發
