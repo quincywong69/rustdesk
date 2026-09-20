@@ -1,0 +1,46 @@
+name: Delete ARM packages (one-shot)
+
+# 用途：刪除已冇用嘅 ARM run-on-arch container image（2026-09-19 已 cut ARM 建置）。
+# 存在理由：兔兔嘅 PAT 冇 delete:packages scope，但 repo GITHUB_TOKEN 有 packages: write。
+# 一次性工具 —— 用完即刪（唔會留喺 master）。
+
+on:
+  workflow_dispatch:
+
+permissions:
+  packages: write
+  contents: read
+
+jobs:
+  delete:
+    name: delete ARM container images
+    runs-on: ubuntu-latest
+    if: github.repository == 'quincywong69/rustdesk'
+    steps:
+      - name: Delete 3 ARM packages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          OWNER=quincywong69
+          for NAME in \
+            "rustdesk/run-on-arch-quincywong69-rustdesk-flutter-nightly-build-aarch64-ubuntu22-04" \
+            "rustdesk/run-on-arch-quincywong69-rustdesk-flutter-nightly-build-aarch64-ubuntu18-04" \
+            "rustdesk/run-on-arch-quincywong69-rustdesk-flutter-nightly-build-armv7-ubuntu18-04-rustdesk" ; do
+            ENC=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1],safe=''))" "$NAME")
+            CODE=$(curl -s -o /tmp/out.txt -w '%{http_code}' -X DELETE \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/users/$OWNER/packages/container/$ENC")
+            echo "DELETE $NAME -> HTTP $CODE"
+            cat /tmp/out.txt; echo
+          done
+
+      - name: List remaining packages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -s -H "Authorization: Bearer $GH_TOKEN" \
+               -H "Accept: application/vnd.github+json" \
+               "https://api.github.com/users/quincywong69/packages?package_type=container&per_page=100" \
+            > /tmp/pkgs.json
+          python3 -c "import json;d=json.load(open('/tmp/pkgs.json'));print('remaining =', len(d)) if isinstance(d,list) else print('list failed:', d);[print('  -',p['name']) for p in (d if isinstance(d,list) else [])]"
