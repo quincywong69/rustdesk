@@ -1,20 +1,24 @@
 name: Self-hosted Runner Smoke Test
 
-# 用途：驗證自架 runner 真係收到 job，並且工具鏈、shell 環境全部可用。
-#   * Windows: 兩部（GH-RUNNER-01-win / GH-RUNNER-02-win）—— 用 matrix 經 per-machine label
-#              (win-01 / win-02) **分別**驗證，唔會隨機只驗一部
-#              2026-09-20 機隊精簡：win-03 / win-04（.203 / .204）runner 註冊已移除，
-#              matrix 收窄為 [win-01, win-02]（唔收窄嘅話已移除嘅 label 會永遠排隊）。
-#              同日兩部改名：GH-RUNNER-0N-rd-win → GH-RUNNER-0N-win（重新註冊，label 不變）。
-#              呢兩個 label 由 GitHub API 加落 runner（唔需要改機），新增機器時照做即可。
-#   * Linux  : github-runner-01-linux / github-runner-02-linux (labels: self-hosted, Linux, X64, build)
-#              2026-09-20 機隊精簡：.221–.224 四個 runner 註冊已移除，Linux 只剩呢兩部。
+# ⛔ 已退役（2026-09-21）—— 自架 runner 全部刪除，CI 全走 GitHub 託管。
 #
-# 安全設計（公開儲存庫）：
-#   * 只可手動觸發（workflow_dispatch），冇 schedule、冇 push 觸發
-#   * if: github.repository == 'quincywong69/rustdesk' → 拒絕 fork PR
-#   * 只跑讀取類指令，唔會產生任何 artifact、唔會改動任何檔案
-#   * 獨立於 flutter-build.yml，完全唔影響現有 build 流程（可隨時刪除此檔）
+# 背景：兔兔 2026-09-21 實測後裁定自架 runner 無效益（自架 nightly 74.8 分 vs 全託管 51.9 分，
+#       慢 44%，step 級證實 100% 係單核時脈差），指示刪除。4 個註冊全部 DELETE，total_count = 0，
+#       機器（win-01/.201、win-02/.202、linux-01/.211、linux-02/.212）由兔兔關機。
+#
+# 為何要改呢個檔：本 workflow 原本硬寫自架 label（[self-hosted, Windows, X64, build, win-0N] /
+#       [self-hosted, Linux, X64, build]）→ 冇任何 runner 時會**永久排隊**，睇落似「卡住」但其實
+#       只係等一部永遠唔會出現嘅機。現改為單一 guard job 跑 ubuntu-latest：派佢會即刻失敗並講明原因。
+#       經 nightly #119 實測，其餘 workflow（flutter-build.yml）嘅 fallback 對「空清單 total_count=0」
+#       同「有註冊但 offline」一樣處理正確，所以嗰邊唔需要改。
+#
+# 如需重建自架 runner（快速回復路徑）：
+#   * Skill：devops/github-actions-self-hosted-runners（51 份 references）
+#   * Linux：~/working/build-infra-project/scripts/provision-linux-runner.sh（idempotent，約 90 秒／部）
+#   * Windows：~/working/build-infra-project/dist/rd-build-setup-v1.0.22.zip → Run-ALL-Setup.bat
+#   * 原有 3 個 job 版本：git 歷史 master 5a124acc6b6d8443c0aa040f86bd6d4b06afe708 之前
+#     （本地副本 ~/working/build-infra-project/archive/selfhosted-smoke.yml.retired-20260921，
+#     md5 36234d387b79db32a668671dd42bb62a）
 
 on:
   workflow_dispatch:
@@ -23,350 +27,18 @@ permissions:
   contents: read
 
 jobs:
-  smoke-windows:
-    name: smoke (windows self-hosted · ${{ matrix.machine }})
-    if: github.repository == 'quincywong69/rustdesk'
-    strategy:
-      fail-fast: false
-      matrix:
-        machine: [win-01, win-02]   # 2026-09-20：機隊精簡至 2 部（32 位停建後只剩 1 個 Windows job）；win-04 已用 v1.0.21 一鍵安裝實測通過後移除
-    runs-on: [self-hosted, Windows, X64, build, "${{ matrix.machine }}"]
-    timeout-minutes: 20
+  retired-guard:
+    name: RETIRED — self-hosted runners removed 2026-09-21
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: "環境資訊"
-        shell: pwsh
+      - name: Explain retirement and fail fast
         run: |
-          Write-Host "runner  : $env:RUNNER_NAME"
-          Write-Host "machine : $env:COMPUTERNAME"
-          Write-Host "account : $([Security.Principal.WindowsIdentity]::GetCurrent().Name)"
-          Write-Host "os      : $([Environment]::OSVersion.VersionString)"
-          $c = Get-CimInstance Win32_ComputerSystem
-          Write-Host ("cpu/ram : {0} logical cores / {1} GB" -f $c.NumberOfLogicalProcessors, [math]::Round($c.TotalPhysicalMemory / 1GB, 1))
-
-      - name: "pwsh 版本 (v1.0.4 修復驗證)"
-        shell: pwsh
-        run: Write-Host "pwsh = $($PSVersionTable.PSVersion) ; edition = $($PSVersionTable.PSEdition)"
-
-      - name: "Git Bash 環境 (shell bash)"
-        shell: bash
-        run: |
-          echo "bash      : $BASH_VERSION"
-          echo "bash path : $(command -v bash)"
-          echo "sed       : $(command -v sed)"
-          echo "tar       : $(command -v tar)"
-          echo "curl      : $(command -v curl)"
-          echo "--- unzip ---"
-          # 2026-09-19：呢一步用 `-e -o pipefail` 執行，`unzip -v | head -2` 會令 unzip
-          # 收到 SIGPIPE（exit 141）→ 整步紅燈（win-01 曾因此誤報失敗）。
-          # 加 `|| true` 令「head 提早收線」唔算錯。
-          unzip -v 2>/dev/null | head -2 || true
-
-      - name: "工具鏈 (runner 服務帳號 PATH 視角)"
-        shell: pwsh
-        run: |
-          $checks = @(
-            @{ n = 'git';     c = 'git --version' },
-            @{ n = 'python3'; c = 'python3 --version' },
-            @{ n = 'cmake';   c = 'cmake --version' },
-            @{ n = 'ninja';   c = 'ninja --version' },
-            @{ n = 'nasm';    c = 'nasm -v' }
-          )
-          foreach ($k in $checks) {
-            try {
-              $out = (Invoke-Expression $k.c 2>&1 | Out-String).Trim() -split "`r?`n" | Select-Object -First 1
-              Write-Host ("[OK]   {0,-8} {1}" -f $k.n, $out)
-            } catch {
-              Write-Host ("[FAIL] {0,-8} {1}" -f $k.n, $_.Exception.Message)
-              exit 1
-            }
-          }
-
-      - name: "MSVC / Windows SDK"
-        shell: pwsh
-        run: |
-          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-          $vs = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>&1 | Out-String).Trim()
-          if (-not $vs) { Write-Host '[FAIL] 找不到 MSVC 工具組'; exit 1 }
-          Write-Host "[OK]   MSVC: $vs"
-          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
-          $out = cmd /c "call `"$vcvars`" >nul 2>&1 && cl 2>&1"
-          if ($out -match 'Microsoft') { Write-Host '[OK]   cl.exe 可執行' } else { Write-Host '[FAIL] cl.exe 無法執行'; exit 1 }
-
-      - name: "MSI 建置工具 nuget / msbuild / dotnet（advisory）"
-        shell: pwsh
-        run: |
-          $names = 'nuget','msbuild','dotnet','makensis','vswhere','7z'
-          $cmds  = Get-Command $names -ErrorAction SilentlyContinue
-          foreach ($n in $names) {
-            $hit = $cmds | Where-Object { $_.Name -eq $n } | Select-Object -First 1
-            if ($hit) { Write-Host ("[OK]   {0,-10} {1}" -f $n, $hit.Source) }
-            else      { Write-Host ("[WARN] {0,-10} 唔喺 PATH（MSI 步驟可能失敗）" -f $n) }
-          }
-          $vs = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-          if (Test-Path $vs) {
-            $msb = (& $vs -latest -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' 2>&1 | Out-String).Trim()
-            if ($msb) { Write-Host "[OK]   MSBuild: $msb" } else { Write-Host '[WARN] vswhere 找不到 MSBuild.exe' }
-          }
-
-      - name: "深探 MSI 工具鏈（檔案系統搜索）"
-        shell: pwsh
-        run: |
-          Write-Host '--- MSBuild.exe 搜索 ---'
-          $roots = @("${env:ProgramFiles}\Microsoft Visual Studio", "${env:ProgramFiles(x86)}\Microsoft Visual Studio")
-          $hits = @()
-          foreach ($r in $roots) { if (Test-Path $r) { $hits += Get-ChildItem -Path $r -Filter 'MSBuild.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 3 } }
-          if ($hits.Count -gt 0) { $hits | ForEach-Object { Write-Host "[OK]   $($_.FullName)" } } else { Write-Host '[WARN] 成套 VS 目錄都搵唔到 MSBuild.exe' }
-          Write-Host '--- VS 安裝資訊 ---'
-          $vs = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-          $path = (& $vs -latest -products * -property installationPath 2>&1 | Out-String).Trim()
-          Write-Host "installPath : $path"
-          $req = (& $vs -latest -products * -requires Microsoft.Component.MSBuild -property installationPath 2>&1 | Out-String).Trim()
-          Write-Host "有 MSBuild 元件 : $(if ($req) { 'YES' } else { 'NO' })"
-          Write-Host '--- .NET SDK ---'
-          foreach ($p in @("${env:ProgramFiles}\dotnet\dotnet.exe", "${env:ProgramFiles(x86)}\dotnet\dotnet.exe")) {
-            if (Test-Path $p) { Write-Host "[OK]   $p"; & $p --list-sdks } else { Write-Host "[WARN] 唔見 $p" }
-          }
-          Write-Host '--- 其他命令 ---'
-          foreach ($n in @('choco','nuget','dotnet','msbuild','winget')) {
-            $c = Get-Command $n -ErrorAction SilentlyContinue
-            if ($c) { Write-Host ("[OK]   {0,-8} {1}" -f $n, $c.Source) } else { Write-Host ("[WARN] {0,-8} MISSING" -f $n) }
-          }
-
-      # ── 機器層面環境核對（v1.0.7 修正後，2026-09-19 新增）──────────────
-      # 目標狀態：唔改 fork workflow，環境由 admin script 提供，所以呢一步用「絕對路徑 +
-      # 全新 process 嘅 PATH」核實，避免任何啟動時 PATH 殘留造成嘅誤報。
-      - name: "機器層面核對：7-Zip / LLVM 目錄 / LIBCLANG_PATH / rustup"
-        shell: pwsh
-        run: |
-          $fail = 0
-          function Chk($name, $cond, $detail) {
-            if ($cond) { Write-Host ("[OK]   {0,-22} {1}" -f $name, $detail) }
-            else { Write-Host ("[FAIL] {0,-22} {1}" -f $name, $detail); $script:fail++ }
-          }
-          $sz = 'C:\Program Files\7-Zip\7z.exe'
-          Chk '7-Zip 檔案' (Test-Path $sz) $sz
-          $w = (& where.exe 7z 2>&1 | Out-String).Trim()
-          $jqreal = 'C:\jq\jq.exe'
-          Chk 'jq 檔案' (Test-Path $jqreal) $jqreal
-          $jqc = Get-Command jq -ErrorAction SilentlyContinue
-          Chk 'jq（PATH 解析）' ($null -ne $jqc) $(if ($jqc) { $jqc.Source } else { 'PATH 上找不到 jq（subosito/flutter-action 需要）' })
-          Chk '7z（PATH 解析）' ($LASTEXITCODE -eq 0) $(if ($w) { $w } else { 'where.exe 找唔到 7z' })
-          $llvm = 'C:\Program Files\LLVM'
-          $hc = 'C:\hostedtoolcache\windows'
-          Chk 'hostedtoolcache junction' (Test-Path $hc) $hc
-          $flroot = Join-Path $hc 'flutter'
-          if (Test-Path $flroot) {
-            $flvers = (Get-ChildItem $flroot -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name) -join ', '
-            Write-Host ("       junction 內 flutter 版本：" + $flvers)
-          }
-          Chk 'LLVM 目錄' (Test-Path $llvm) $llvm
-          $lib = [Environment]::GetEnvironmentVariable('LIBCLANG_PATH', 'Machine')
-          Chk 'LIBCLANG_PATH（機器）' ($lib -eq (Join-Path $llvm 'bin')) $(if ($lib) { $lib } else { '(未設定)' })
-          $mp = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-          Chk 'PATH 含 7-Zip' ($mp -like '*7-Zip*') 'system PATH'
-          Chk 'PATH 含 cargo\bin' ($mp -like '*cargo\bin*') 'system PATH'
-          $r = Get-Command rustup -ErrorAction SilentlyContinue
-          Chk 'rustup（PATH 解析）' ($null -ne $r) $(if ($r) { $r.Source } else { 'PATH 上找不到 rustup' })
-          if ($r) { Write-Host ("       rustup = " + (& rustup -V 2>&1 | Select-Object -First 1)) }
-          $c = Get-Command cargo -ErrorAction SilentlyContinue
-          Chk 'cargo（PATH 解析）' ($null -ne $c) $(if ($c) { $c.Source } else { 'PATH 上找不到 cargo' })
-          # 2026-09-20：Build msi 需要 SuppressValidation=true（WiX ICE 驗證跳過）。
-          # 兩個獨立斷言：(a) 機器層有設定 (b) job process 真係繼承到 ——
-          # 只驗 (a) 唔夠：服務唔重啟嘅話環境變數唔會傳入 job，msi 照樣爆 WIX0217。
-          $svm = [Environment]::GetEnvironmentVariable('SuppressValidation', 'Machine')
-          Chk 'SuppressValidation（機器）' ($svm -eq 'true') $(if ($svm) { $svm } else { '(未設定) → Build msi 會爆 WIX0217' })
-          Chk 'SuppressValidation（job 繼承）' ($env:SuppressValidation -eq 'true') $(if ($env:SuppressValidation) { $env:SuppressValidation } else { 'job 內冇繼承 → runner 服務未重啟？（請跑 Run-06）' })
-          if ($fail -gt 0) { Write-Host "::error::有 $fail 項環境核對失敗"; exit 1 }
-          Write-Host '機器層面環境全部通過。'
-
-      # ── LLVM 安裝驗證（2026-09-19）────────────────────────────────────
-      # 刻意「唔傳 directory」= 用 action 自己嘅預設 C:\Program Files\LLVM —— 即還原 workflow
-      # 之後嘅真實行為。呢兩步成功就證明「修機」方案已取代 code 層面嘅 workaround。
-      - name: Install LLVM and Clang — KyleMayes v2.0.9（預設路徑）
-        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0 # v2.0.9
-        with:
-          version: 15.0.6
-
-      - name: Install LLVM and Clang — rustdesk-org 32bit（預設路徑）
-        uses: rustdesk-org/install-llvm-action-32bit@6aa7d9ad3df84dff01cd4596dd0fc880a7f47fce
-        with:
-          version: 15.0.6
-
-      - name: "LLVM 可用性驗證（libclang.dll + clang）"
-        shell: pwsh
-        run: |
-          $lib = Join-Path 'C:\Program Files\LLVM' 'bin\libclang.dll'
-          if (-not (Test-Path $lib)) { Write-Host "::error::唔見 $lib（預設路徑安裝失敗）"; exit 1 }
-          Write-Host "[OK]   $lib"
-          $env:LIBCLANG_PATH = (Join-Path 'C:\Program Files\LLVM' 'bin')
-          & (Join-Path 'C:\Program Files\LLVM' 'bin\clang.exe') --version | Select-Object -First 1
-
-      - name: "vcpkg 目錄可寫 (runner 服務帳號)"
-        shell: pwsh
-        run: |
-          if (-not (Test-Path 'C:\vcpkg')) { Write-Host '[WARN] C:\vcpkg 未存在（run-vcpkg 會自行 clone）'; exit 0 }
-          try {
-            $t = Join-Path 'C:\vcpkg' 'runner-write-test.tmp'
-            'ok' | Set-Content -Path $t -ErrorAction Stop
-            Remove-Item $t -Force
-            Write-Host '[OK]   C:\vcpkg 可寫'
-          } catch {
-            Write-Host ("[FAIL] C:\vcpkg 不可寫：{0}" -f $_.Exception.Message)
-            exit 1
-          }
-
-      # ── 符號連結支援（v1.0.15 修正驗證，2026-09-19）────────────────────
-      # `flutter build windows` 為 plugins 建立 symlink；Windows 預設只有 Administrators
-      # 有 SeCreateSymbolicLinkPrivilege。呢一步以 **runner 服務帳號身分**真正建立一個
-      # symlink —— 係唯一可靠嘅驗證方式（admin 身分測試唔算，因為 admin 一定有權）。
-      - name: "符號連結支援（flutter build windows 需要）"
-        shell: pwsh
-        run: |
-          $fail = 0
-          $k = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock'
-          $dev = $null
-          try { $dev = (Get-ItemProperty -Path $k -Name 'AllowDevelopmentWithoutDevLicense' -ErrorAction SilentlyContinue).AllowDevelopmentWithoutDevLicense } catch { }
-          Write-Host ("Developer Mode (AllowDevelopmentWithoutDevLicense) = " + $(if ($null -ne $dev) { $dev } else { '(未設定)' }))
-          Write-Host ("帳號 = " + [Security.Principal.WindowsIdentity]::GetCurrent().Name)
-          $dir    = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
-          $target = Join-Path $dir 'symlink-target.txt'
-          $link   = Join-Path $dir 'symlink-test'
-          'symlink-probe' | Set-Content -Path $target -Force
-          if (Test-Path $link) { Remove-Item $link -Force -Recurse -ErrorAction SilentlyContinue }
-          try {
-            New-Item -ItemType SymbolicLink -Path $link -Target $target -ErrorAction Stop | Out-Null
-            $item = Get-Item $link -ErrorAction Stop
-            Write-Host ("[OK]   符號連結建立成功（LinkType=" + $item.LinkType + "）")
-            Remove-Item $link -Force -ErrorAction SilentlyContinue
-          } catch {
-            Write-Host ("[FAIL] 無法建立符號連結：" + $_.Exception.Message)
-            $fail++
-          }
-          Remove-Item $target -Force -ErrorAction SilentlyContinue
-          if ($fail -gt 0) { Write-Host '::error::symlink 測試失敗 → flutter build windows 會失敗'; exit 1 }
-          Write-Host '符號連結支援正常。'
-
-      # ── Git usr\bin 喺 PATH（託管映像對等性，2026-09-19 新增）─────────
-      # Build msi 步驟最後一行係 `sha256sum ../../SignOutput/rustdesk-*.msi`（pwsh 執行）。
-      # GitHub 託管 windows 映像嘅系統 PATH 含 `C:\Program Files\Git\usr\bin`，
-      # 所以 sha256sum/sed/md5sum 等 Unix 工具直接可用；自架機只有 Git\bin 同 Git\cmd，
-      # 令 MSI 建好之後最後一行爆 `The term 'sha256sum' is not recognized`。
-      # 呢一步用 pwsh（同真實 workflow 同一個 shell）核實 PATH 對等性。
-      - name: "Unix 工具可用性（Build msi 需要 sha256sum）"
-        shell: pwsh
-        run: |
-          $fail = 0
-          $usrBin = 'C:\Program Files\Git\usr\bin'
-          Write-Host ("Git usr\bin 存在 : " + (Test-Path $usrBin))
-          $mp = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-          Write-Host ("系統 PATH 含 Git\usr\bin : " + ($mp -like '*Git\usr\bin*'))
-          foreach ($n in @('sha256sum', 'md5sum', 'sed', 'grep', 'awk', 'unzip', 'tar')) {
-            $c = Get-Command $n -ErrorAction SilentlyContinue
-            if ($c) { Write-Host ("[OK]   {0,-10} {1}" -f $n, $c.Source) }
-            else    { Write-Host ("[FAIL] {0,-10} 唔喺 PATH（Build msi / 其他步驟會失敗）" -f $n); $script:fail++ }
-          }
-          if ($fail -gt 0) { Write-Host "::error::有 $fail 個 Unix 工具唔可用"; exit 1 }
-          # 真正跑一次 sha256sum（同 workflow 用法一致）
-          $t = Join-Path $env:RUNNER_TEMP 'sha256-probe.txt'
-          'parity-probe' | Set-Content -Path $t -Encoding ascii
-          $out = sha256sum $t 2>&1 | Out-String
-          Write-Host ("sha256sum 實測輸出 : " + $out.Trim())
-          Remove-Item $t -Force -ErrorAction SilentlyContinue
-
-  smoke-linux:
-    name: smoke (linux self-hosted)
-    if: github.repository == 'quincywong69/rustdesk'
-    runs-on: [self-hosted, Linux, X64, build]
-    timeout-minutes: 20
-    steps:
-      - name: "環境資訊"
-        run: |
-          echo "runner  : $RUNNER_NAME"
-          echo "machine : $(hostname)"
-          echo "account : $(whoami)"
-          . /etc/os-release; echo "os      : $PRETTY_NAME"
-          echo "kernel  : $(uname -r)"
-          echo "cpu     : $(nproc) cores"
-          free -h | sed -n 1,2p
-          df -h / | tail -1
-
-      - name: "工具鏈"
-        run: |
-          fail=0
-          # ⚠️ 2026-09-20：呢個清單係被真實 nightly 紅燈教返嚟嘅 —— 每中一次就加一項：
-          #    `zip`      → vcpkg bootstrap-vcpkg.sh（同 curl/unzip/tar 一齊）需要，缺 → Setup vcpkg 紅
-          #    `autoconf` → vcpkg port mfx-dispatch（ffmpeg 嘅 QSV）需要，缺 → Install vcpkg dependencies 紅
-          #    註：用 `libtoolize` 而唔係 `libtool` —— Debian 嘅 libtool 套件只提供 libtoolize，
-          #        `libtool` 本身係每個 project 由 configure 生成（兩部機都係咁，唔算缺失）。
-          for c in git curl wget tar unzip zip jq python3 gcc make cmake ninja nasm pkg-config \
-                   autoconf automake libtoolize m4 clang llvm-config \
-                   gdk-pixbuf-query-loaders gtk-update-icon-cache glib-compile-schemas \
-                   update-mime-database desktop-file-validate patchelf bsdtar gst-launch-1.0 \
-                   mksquashfs zsyncmake readelf; do
-            p=$(command -v "$c" || true)
-            if [ -n "$p" ]; then printf "[OK]   %-12s %s\n" "$c" "$p"; else printf "[MISS] %-12s ← 會令 vcpkg/bindgen 建置失敗\n" "$c"; fail=$((fail+1)); fi
-          done
-          echo "--- X11 / LLVM 標頭（ffmpeg libva + bindgen 用）---"
-          for h in /usr/include/X11/Xlib.h /usr/include/xcb/xcb.h; do
-            [ -e "$h" ] && echo "[OK]   $h" || { echo "[MISS] $h"; fail=$((fail+1)); }
-          done
-          ls -d /usr/lib/llvm-*/lib/libclang.so 2>/dev/null | head -2 || echo "[WARN] 未見 libclang.so（bindgen 需要）"
-          # 2026-09-20：appimage job 用 appimage-builder（FUSE 掛載）—— /dev/fuse 係**裝置**，
-          # 唔可以靠 apt 補，一定要主機層面有，所以列為硬性斷言。
-          echo "--- FUSE（appimage job 用）---"
-          [ -e /dev/fuse ] && echo "[OK]   /dev/fuse" || { echo "[MISS] /dev/fuse ← appimage job 會失敗"; fail=$((fail+1)); }
-          command -v fusermount >/dev/null && echo "[OK]   fusermount" || { echo "[MISS] fusermount"; fail=$((fail+1)); }
-          [ "$fail" -gt 0 ] && { echo "::error::有 $fail 項建置依賴缺失"; exit 1; }
-          echo "建置依賴齊備。"
-
-      - name: "出網 + sudo 能力（build 步驟需要）"
-        run: |
-          curl -s -o /dev/null -w "[OK]   api.github.com %{http_code}\n" --max-time 15 https://api.github.com
-          sudo -n true 2>/dev/null && echo "[OK]   sudo NOPASSWD" || echo "[WARN] sudo 需要密碼（build 步驟嘅 apt-get install 可能會失敗）"
-
-      - name: "runner pre-job hook + workspace 權限（防 checkout EACCES）"
-        run: |
-          fail=0
-          H="$HOME/actions-runner/rd-job-started.sh"
-          if [ -x "$H" ]; then echo "[OK]   pre-job hook $H"; else echo "[MISS] pre-job hook $H ← 容器留低嘅檔案會令下一個 job checkout 失敗"; fail=$((fail+1)); fi
-          if grep -q '^ACTIONS_RUNNER_HOOK_JOB_STARTED=' "$HOME/actions-runner/.env" 2>/dev/null; then
-            echo "[OK]   .env 已設定：$(grep '^ACTIONS_RUNNER_HOOK_JOB_STARTED=' "$HOME/actions-runner/.env")"
-          else
-            echo "[MISS] .env 冇 ACTIONS_RUNNER_HOOK_JOB_STARTED ← hook 唔會執行"; fail=$((fail+1))
-          fi
-          # 真正嘅判據：workspace 內有冇 ghadmin 刪唔到嘅目錄
-          W="$HOME/actions-runner/_work"
-          if [ -d "$W" ]; then
-            n=$(find "$W" -type d ! -writable 2>/dev/null | wc -l)
-            echo "[INFO] _work 內 ghadmin 冇寫入權嘅目錄數 = $n"
-            if [ "$n" -gt 0 ]; then
-              echo "[MISS] 有 $n 個目錄刪唔到 → checkout 會報 EACCES（hook 應該已修復，請人手 chown/chmod）"; fail=$((fail+1))
-            else
-              echo "[OK]   workspace 全部可寫"
-            fi
-          fi
-          [ "$fail" -gt 0 ] && { echo "::error::runner hook / workspace 權限有 $fail 項問題"; exit 1; }
-          echo "pre-job hook 與 workspace 權限正常。"
-
-      - name: "host 依賴：sudo /opt/artifacts / swap（模擬 linux build job 前置步驟）"
-        run: |
-          echo "--- 模擬 'Maximize build space' 步驟 ---"
-          sudo rm -rf /opt/ghc /usr/local/lib/android /usr/share/dotnet || true
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq nasm qemu-user-static
-          echo "[OK] sudo apt-get 可用"
-          echo "--- /opt/artifacts（run-vcpkg 用）---"
-          if [ -w /opt/artifacts ]; then echo "[OK] /opt/artifacts 可寫（帳號 $USER）"; else echo "[FAIL] /opt/artifacts 不可寫"; exit 1; fi
-          echo "--- 資源 ---"
-          df -h / | tail -1
-          free -m | head -2
-
-      - name: "docker + binfmt（run-on-arch 容器建置必要）"
-        run: |
-          docker version --format 'client={{.Client.Version}} server={{.Server.Version}}' 2>&1 | head -1
-          if docker run --rm hello-world >/dev/null 2>&1; then echo "[OK] docker run 成功"; else echo "[FAIL] docker run 失敗"; exit 1; fi
-          echo "--- binfmt handlers ---"
-          ls /proc/sys/fs/binfmt_misc/ 2>/dev/null | grep -i qemu || echo "[WARN] 未見 qemu binfmt（qemu-user-static 剛裝，可能需 reboot 才註冊）"
-
-      - name: "總結"
-        run: echo "自架 Linux runner 可用。"
+          echo "::error::selfhosted-smoke.yml 已退役（2026-09-21）。"
+          echo ""
+          echo "自架 runner 已全部刪除（total_count = 0），所以原本硬寫嘅 self-hosted label"
+          echo "（[self-hosted, Windows|Linux, X64, build]）永遠唔會有 runner 接 job。"
+          echo ""
+          echo "RustDesk CI 現時 100% 行 GitHub 託管 runner，唔需要再派呢個 workflow。"
+          echo "如果係要重建自架 runner，見檔頭註解嘅快速回復路徑。"
+          exit 1
