@@ -1122,6 +1122,14 @@ pub fn get_custom_rendezvous_server(custom: String) -> String {
     "".to_owned()
 }
 
+/// OUR FORK (2026-09-19): API server of our self-hosted deployment.
+///
+/// Served over HTTPS by a TLS reverse proxy (nginx + Let's Encrypt) on server A,
+/// which forwards to the rustdesk-api instance; the ID/relay server stays at the
+/// office (`rd.inet-tech.cn`). Empty string = keep the legacy derivation below.
+/// Can be overridden at build time with the `RUSTDESK_API_SERVER` env var.
+const SELF_HOSTED_API_SERVER: &str = "https://rdapi.inet-tech.cn";
+
 #[inline]
 pub fn get_api_server(api: String, custom: String) -> String {
     if Config::no_register_device() {
@@ -1157,6 +1165,37 @@ fn get_api_server_(api: String, custom: String) -> String {
             return format!("http://{}:{}", s, config::RENDEZVOUS_PORT - 2);
         } else {
             return format!("http://{}", s);
+        }
+    }
+    // OUR FORK (2026-09-19): self-hosted deployments only set `RENDEZVOUS_SERVERS`
+    // (injected at build time by CI), which does NOT flow into
+    // `get_custom_rendezvous_server()` — `PROD_RENDEZVOUS_SERVER` is read-only in the
+    // open-source tree and always empty. As a result a build pointing at our own ID
+    // server still sent the account login to the OFFICIAL RustDesk API server
+    // (admin.rustdesk.com) — observed live in the client's network connections.
+    //
+    // OUR FORK (2026-09-19, HTTPS): our API server now lives behind a TLS reverse
+    // proxy (nginx + Let's Encrypt) on a dedicated hostname — https://rdapi.inet-tech.cn
+    // — so account login and address-book sync are encrypted end to end. Port 21114
+    // is plain HTTP and is no longer used by our builds. The value is a compile-time
+    // constant (overridable with the RUSTDESK_API_SERVER env var at build time) so the
+    // encrypted URL is baked into every platform without touching upstream files.
+    // Skipped for stock builds that keep the official rendezvous server.
+    if let Some(first) = config::RENDEZVOUS_SERVERS.first() {
+        let first = first.to_string();
+        if !first.is_empty() && !first.contains("rustdesk.com") {
+            let api = option_env!("RUSTDESK_API_SERVER")
+                .filter(|s| !s.is_empty())
+                .unwrap_or(SELF_HOSTED_API_SERVER);
+            if !api.is_empty() {
+                return api.to_owned();
+            }
+            let s = crate::increase_port(&first, -2);
+            if s == first {
+                return format!("http://{}:{}", s, config::RENDEZVOUS_PORT - 2);
+            } else {
+                return format!("http://{}", s);
+            }
         }
     }
     "https://admin.rustdesk.com".to_owned()
@@ -2140,7 +2179,21 @@ pub fn check_process(arg: &str, mut same_uid: bool) -> bool {
     false
 }
 
+/// OUR FORK (2026-09-19) — `secure_tcp` handshake is disabled.
+///
+/// The open-source `hbbs`/`hbbr` never sends the server-initiated `KeyExchange`
+/// message that the commercial relay uses, so the client would hang until
+/// `READ_TIMEOUT` on every rendezvous connection to our own (OSS) server.
+/// Skipping the handshake restores the plain `SecureTCP` path the
+/// self-hosted OSS server expects. End-to-end encryption between peers is unaffected;
+/// only the extra client↔rendezvous-server hop encryption is omitted (the OSS server
+/// never offered it). Set to `false` to restore upstream behaviour.
+const SKIP_SECURE_TCP_HANDSHAKE: bool = true;
+
 async fn secure_tcp_impl(conn: &mut Stream, key: &str, log_on_success: bool) -> ResultType<()> {
+    if SKIP_SECURE_TCP_HANDSHAKE {
+        return Ok(());
+    }
     // Skip additional encryption when using WebSocket connections (wss://)
     // as WebSocket Secure (wss://) already provides transport layer encryption.
     // This doesn't affect the end-to-end encryption between clients,
