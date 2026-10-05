@@ -2147,6 +2147,39 @@ jobs:
           head -n 100 "${VCPKG_ROOT}/buildtrees/ffmpeg/build-x64-linux-rel-out.log" || true
         shell: bash
 
+      - name: Inject custom server config (macOS/Linux)
+        if: runner.os != 'Windows' && env.RENDEZVOUS_SERVER != '' && env.RS_PUB_KEY != ''
+        env:
+          RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
+          RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
+        shell: bash
+        run: |
+          echo "========================================"
+          echo "Injecting custom server configuration"
+          echo "Rendezvous Server: $RENDEZVOUS_SERVER"
+          echo "Public Key: ${RS_PUB_KEY:0:20}..."
+          echo "========================================"
+          
+          configFile="libs/hbb_common/src/config.rs"
+          if [ ! -f "$configFile" ]; then
+            echo "❌ Config file not found: $configFile"
+            exit 1
+          fi
+          
+          cp "$configFile" "$configFile.backup"
+          
+          # macOS 用 sed -i ''，Linux 用 sed -i
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            sed -i '' "s|pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[\"[^\"]*\"\]|pub const RENDEZVOUS_SERVERS: \&[\&str] = \&[\"$RENDEZVOUS_SERVER\"]|g" "$configFile"
+            sed -i '' "s|pub const RS_PUB_KEY: &str = \"[^\"]*\"|pub const RS_PUB_KEY: \&str = \"$RS_PUB_KEY\"|g" "$configFile"
+          else
+            sed -i "s|pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[\"[^\"]*\"\]|pub const RENDEZVOUS_SERVERS: \&[\&str] = \&[\"$RENDEZVOUS_SERVER\"]|g" "$configFile"
+            sed -i "s|pub const RS_PUB_KEY: &str = \"[^\"]*\"|pub const RS_PUB_KEY: \&str = \"$RS_PUB_KEY\"|g" "$configFile"
+          fi
+          
+          echo "✅ Config injected successfully"
+          grep -E "RENDEZVOUS_SERVERS|RS_PUB_KEY" "$configFile" | head -2
+
       # The container's meson is too old to build libdrmtap, so build it here from the pin in
       # build.py and hand the .so to the container below via DRMTAP_PREBUILT_DIR.
       - name: Build libdrmtap
