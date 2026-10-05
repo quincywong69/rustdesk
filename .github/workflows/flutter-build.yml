@@ -499,6 +499,11 @@ jobs:
   build-for-windows-sciter:
     name: ${{ matrix.job.target }} (${{ matrix.job.os }})
     runs-on: ${{ matrix.job.os }}
+    # ⛔ 2026-10-05 停用（兔兔：「應該以後都不需要 32 bit 的」）：
+    #    唔再建 32 位（i686）Windows Sciter 版 —— 現場冇 32 位 Windows 機器。
+    # 影響：release 唔再有 rustdesk-<ver>-x86-sciter.exe；unsigned.tar.gz 唔再包 windows-x86/。
+    # 回復方法：刪走下面嘅 `if: false` 一行即可（upstream 原本冇 job-level if）。
+    if: false
     # Temporarily disable this action due to additional test is needed.
     # if: false
     strategy:
@@ -1140,11 +1145,14 @@ jobs:
           name: rustdesk-unsigned-windows-aarch64
           path: ./windows-aarch64/
 
-      - name: Download Artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: rustdesk-unsigned-windows-x86
-          path: ./windows-x86/
+      # ⛔ 2026-10-05 停用：build-for-windows-sciter（i686 32 位）已停建 →
+      #    冇 rustdesk-unsigned-windows-x86 呢個 artifact，下載必定失敗，所以整步移除。
+      #    回復 32 位建置時，將以下步驟復原（同埋 tar 參數加返 windows-x86）。
+      # - name: Download Artifacts
+      #   uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      #   with:
+      #     name: rustdesk-unsigned-windows-x86
+      #     path: ./windows-x86/
 
       - name: Download Artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -1160,7 +1168,8 @@ jobs:
 
       - name: Combine unsigned app
         run: |
-          tar czf rustdesk-${{ env.VERSION }}-unsigned.tar.gz *.dmg windows-x86_64 windows-aarch64 windows-x86 msi-template
+          # ⛔ 2026-10-05 停用：windows-x86 已唔再建（見 build-for-windows-sciter 嘅 if: false）
+          tar czf rustdesk-${{ env.VERSION }}-unsigned.tar.gz *.dmg windows-x86_64 windows-aarch64 msi-template
 
       - name: Publish unsigned app
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
