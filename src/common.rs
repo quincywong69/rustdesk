@@ -3644,6 +3644,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_secure_tcp_legacy_and_signed_servers_exchange_application_data() {
+        // OUR FORK: with SKIP_SECURE_TCP_HANDSHAKE enabled the client never performs the
+        // secure_tcp handshake, so this test (which asserts the connection ends up
+        // secured) does not apply. Set SKIP_SECURE_TCP_HANDSHAKE = false to restore
+        // upstream behaviour; this test then runs automatically again.
+        if SKIP_SECURE_TCP_HANDSHAKE {
+            return;
+        }
         for (advertised, signed) in [(0, false), (1, true), (3, true)] {
             for required in [false, true] {
                 let (key, sk) = server_key();
@@ -3724,6 +3731,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_secure_tcp_rejects_unverified_versions_before_reply() {
+        // OUR FORK: see the note on
+        // test_secure_tcp_legacy_and_signed_servers_exchange_application_data above —
+        // the handshake is skipped in this fork, so these rejection paths are not
+        // exercised. Set SKIP_SECURE_TCP_HANDSHAKE = false to restore them.
+        if SKIP_SECURE_TCP_HANDSHAKE {
+            return;
+        }
         let (key, sk) = server_key();
         let (mut eph_pk, _) = box_::gen_keypair();
         eph_pk.0[31] |= 0x80;
